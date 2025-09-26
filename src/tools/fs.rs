@@ -29,7 +29,10 @@ impl FileSystem {
     }
 
     pub fn canonicalize(path: &str) -> Result<PathBuf, CmdError> {
-        let dir = PathBuf::from(path);
+        let dir = match path.ends_with(MAIN_SEPARATOR) {
+            true => PathBuf::from(path.strip_suffix(MAIN_SEPARATOR).unwrap()),
+            false => PathBuf::from(path),
+        };
         let exist = fs::exists(&dir).map_err(|err| IoError(String::from(dir.to_str().unwrap()), err.to_string()))?;
         if exist {
             return dir.canonicalize().map_err(|err| IoError(String::from(dir.to_str().unwrap()), err.to_string()));
