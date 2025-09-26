@@ -81,8 +81,14 @@ impl Command for BackupCommand {
             },
         }
         .unwrap_or_default();
-        if let Some(ps) = Snapshot::get_previous(&db, snapshot.id)? {
-            self.previous_snapshot = ps;
+        if self.args.dry_run {
+            if let Some(ps) = Snapshot::get_latest(&db)? {
+                self.previous_snapshot = ps;
+            }
+        } else {
+            if let Some(ps) = Snapshot::get_previous(&db, snapshot.id)? {
+                self.previous_snapshot = ps;
+            }
         }
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
         if !self.process_directory(&db, &fs, &mut snapshot, &self.args.config.source)? && !self.args.quiet {
