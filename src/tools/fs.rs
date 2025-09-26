@@ -42,6 +42,7 @@ impl FileSystem {
 
     fn sanitize(path: &Path) -> PathBuf {
         let mut str = String::from(path.to_str().unwrap());
+        str = str.replace("\\\\?\\", "");
         str = str.replace(":\\", "_");
         str = str.replace(MAIN_SEPARATOR, "_");
         str = str.replace('?', "_");
