@@ -1,0 +1,136 @@
+use regex::Regex;
+
+use crate::args::list::ListArgs;
+use crate::cmds::command;
+use crate::cmds::command::Command;
+use crate::cmds::file::File;
+use crate::cmds::snapshot::Snapshot;
+use crate::tools::cmderror::CmdError::{self, InvalidOption};
+use crate::tools::db::Database;
+
+pub struct ListCommand {
+    args: ListArgs,
+}
+
+impl Default for ListCommand {
+    fn default() -> Self {
+        ListCommand::from(ListArgs::default())
+    }
+}
+
+impl From<ListArgs> for ListCommand {
+    fn from(args: ListArgs) -> Self {
+        ListCommand { args }
+    }
+}
+
+impl Command for ListCommand {
+    fn validate(&mut self) -> Result<(), CmdError> {
+        if (self.args.sid != 0 || self.args.deleted || self.args.diff_sid != 0) && !self.args.pattern.is_empty() {
+            return Err(InvalidOption(String::from("--pattern does not work with --snapshot, --deleted or --diff-with")));
+        }
+        if self.args.diff_sid != 0 && self.args.sid == 0 {
+            return Err(InvalidOption(String::from("-diff-with requires a valid --snapshot")));
+        }
+        Regex::new(&self.args.pattern).map_err(|_| InvalidOption(format!("Invalid pattern {}", self.args.pattern)))?;
+        Ok(())
+    }
+
+    fn help(&self) {
+        println!("Usage: {} list [OPTIONS] <BACKUP_PATH>", self.args.exe);
+        println!();
+        println!("Shows files in a snapshot or the specified files history.");
+        println!();
+        println!("Options:");
+        println!("\t-s, --snapshot <ID>\t\t\tList the content of a specific snapshot");
+        println!("\t-i, --diff-with\t\t\t\tShow differences with the specified snapshot");
+        println!("\t-p, --pattern <PATTERN>\t\t\tShow all historical versions for specified files");
+        println!("\t-d, --deleted\t\t\t\tShow only deleted files in the specified snapshot");
+        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
+        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
+    }
+
+    fn run(&mut self) -> Result<(), CmdError> {
+        if self.args.verbose {
+            println!("list command started");
+            println!("Running {}", self.args);
+        }
+        match command::start(&self.args.config.target) {
+            Ok(_) => (),
+            Err(err) => match err {
+                CmdError::NoRemote() => (),
+                _ => return Err(err),
+            },
+        };
+        self.args.config.read(&command::config_file(&self.args.config.target))?;
+        let db = Database::open(&self.args.config.target)?;
+        if let Some(mut snapshot) = Snapshot::get_latest(&db)? {
+            if !self.args.pattern.is_empty() {
+                self.list_file(&db, snapshot)?;
+            } else {
+                if self.args.sid == 0 {
+                    self.args.sid = snapshot.id;
+                } else if let Some(s) = Snapshot::get(&db, self.args.sid)? {
+                    snapshot = s;
+                } else {
+                    return Ok(());
+                }
+                self.list_snapshot(&db, &snapshot)?;
+            }
+        }
+        command::stop(&self.args.config.target)
+    }
+}
+
+impl ListCommand {
+    fn list_snapshot(&self, db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
+        let files = match self.args.deleted {
+            true => {
+                if let Some(previous_snapshot) = Snapshot::get_previous(db, snapshot.id)? {
+                    File::deleted_files(db, &previous_snapshot, snapshot)?
+                } else {
+                    vec![]
+                }
+            }
+            false => match self.args.diff_sid {
+                0 => File::files(db, snapshot)?,
+                _ => {
+                    if let Some(diff_snapshot) = Snapshot::get(db, self.args.diff_sid)? {
+                        File::diff(db, snapshot, &diff_snapshot)?
+                    } else {
+                        vec![]
+                    }
+                }
+            },
+        };
+        if !self.args.quiet {
+            Snapshot::header();
+        }
+        println!("{}\n", snapshot);
+        if !self.args.quiet {
+            File::header();
+        }
+        for file in files {
+            println!("{}", file);
+        }
+        Ok(())
+    }
+
+    fn list_file(&self, db: &Database, _snapshot: Snapshot) -> Result<(), CmdError> {
+        let files = File::history(db, &self.args.pattern)?;
+        if !self.args.quiet {
+            File::header();
+        }
+        let mut prev: Option<File> = None;
+        for file in files {
+            if let Some(p) = prev
+                && p.fullname() != file.fullname()
+            {
+                println!()
+            }
+            println!("{}", file);
+            prev = Some(file);
+        }
+        Ok(())
+    }
+}
