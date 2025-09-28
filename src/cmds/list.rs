@@ -88,6 +88,12 @@ impl ListCommand {
             true => {
                 if let Some(previous_snapshot) = Snapshot::get_previous(db, snapshot.id)? {
                     File::deleted_files(db, &previous_snapshot, snapshot)?
+                } else if !self.args.config.incremental {
+                    if let Some(previous_snapshot) = Snapshot::get_previous_sync_mode(db, snapshot.id)? {
+                        File::deleted_files_sync_mode(db, &previous_snapshot, snapshot)?
+                    } else {
+                        vec![]
+                    }
                 } else {
                     vec![]
                 }
@@ -96,7 +102,10 @@ impl ListCommand {
                 0 => File::files(db, snapshot)?,
                 _ => {
                     if let Some(diff_snapshot) = Snapshot::get(db, self.args.diff_sid)? {
-                        File::diff(db, snapshot, &diff_snapshot)?
+                        match self.args.config.incremental {
+                            true => File::diff(db, snapshot, &diff_snapshot)?,
+                            false => File::diff_sync_mode(db, snapshot, &diff_snapshot)?,
+                        }
                     } else {
                         vec![]
                     }
@@ -117,7 +126,10 @@ impl ListCommand {
     }
 
     fn list_file(&self, db: &Database, _snapshot: Snapshot) -> Result<(), CmdError> {
-        let files = File::history(db, &self.args.pattern)?;
+        let files = match self.args.config.incremental {
+            true => File::history(db, &self.args.pattern)?,
+            false => File::history_sync_mode(db, &self.args.pattern)?,
+        };
         if !self.args.quiet {
             File::header();
         }

@@ -16,6 +16,9 @@ use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 
 const READ: &str = "SELECT fv.id, sf.snapshot_id, fv.digest, fv.path, fv.archive, fv.name, fv.size, fv.created, fv.modified, deleted_sid, fv.is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.version_id";
 
+const READ_SYNC_MODE: &str =
+    "SELECT id, snapshot_id, digest, path, archive, name, size, created, modified, deleted_sid, is_dir FROM filehistory";
+
 const READ_NO_SNAPSHOT: &str = "SELECT id, 0, digest, path, archive, name, size, created, modified, deleted_sid, is_dir FROM fileversions";
 
 const ORPHANS: &str = "SELECT id, 0, digest, path, archive, name, size, created, modified, deleted_sid, is_dir FROM fileversions WHERE id NOT IN (SELECT version_id FROM snapshotfiles) ORDER BY is_dir ASC, path DESC, name DESC";
@@ -23,6 +26,8 @@ const ORPHANS: &str = "SELECT id, 0, digest, path, archive, name, size, created,
 const INSERT: &str = "INSERT INTO fileversions (digest, path, archive, name, size, created, modified, deleted_sid, is_dir) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id";
 
 const INSERT_REF: &str = "INSERT INTO snapshotfiles (snapshot_id, version_id) VALUES (?1, ?2)";
+
+const INSERT_HISTORY_SYNC_MODE: &str = "INSERT INTO filehistory SELECT id, ?1, digest, path, archive, name, size, compressed_size, encrypted, created, modified, deleted_sid, is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.version_id WHERE sf.snapshot_id=?1";
 
 const ARCHIVE: &str = "UPDATE fileversions SET archive=?2, deleted_sid=?3 WHERE id=?1";
 
@@ -192,6 +197,15 @@ impl File {
         File::list(db, &sql, params![path])
     }
 
+    pub fn history_sync_mode(db: &Database, name: &str) -> Result<Vec<File>, CmdError> {
+        let path = Self::fqn(&PathBuf::from(name));
+        let mut sql = String::from(READ_SYNC_MODE);
+        sql.push_str(" WHERE path||'");
+        sql.push(MAIN_SEPARATOR);
+        sql.push_str("'||name REGEXP ?1 ORDER BY path ASC, name ASC");
+        File::list(db, &sql, params![path])
+    }
+
     pub fn orphans(db: &Database) -> Result<Vec<File>, CmdError> {
         File::list(db, ORPHANS, params![])
     }
@@ -205,6 +219,12 @@ impl File {
     pub fn deleted_files(db: &Database, previous_snapshot: &Snapshot, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND deleted_sid=?2 AND fv.is_dir=0 ORDER BY fv.path ASC, fv.name ASC");
+        File::list(db, &sql, params![previous_snapshot.id, snapshot.id])
+    }
+
+    pub fn deleted_files_sync_mode(db: &Database, previous_snapshot: &Snapshot, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+        let mut sql = String::from(READ_SYNC_MODE);
+        sql.push_str(" WHERE snapshot_id=?1 AND is_dir=0 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) ORDER BY path ASC, name ASC");
         File::list(db, &sql, params![previous_snapshot.id, snapshot.id])
     }
 
@@ -268,6 +288,18 @@ impl File {
         File::list(db, &sql, params![snapshot.id, previous_snapshot.id])
     }
 
+    pub fn diff_sync_mode(db: &Database, snapshot: &Snapshot, previous_snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+        let mut sql = String::from(READ_SYNC_MODE);
+        // in previous snapshot, but not in current
+        sql.push_str(" WHERE snapshot_id=?2 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?1) UNION ");
+        sql.push_str(READ_SYNC_MODE);
+        // in current snapshot, but not in previous
+        sql.push_str(
+            " WHERE snapshot_id=?1 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) ORDER BY path ASC, name",
+        );
+        File::list(db, &sql, params![snapshot.id, previous_snapshot.id])
+    }
+
     pub fn dirs_matching(db: &Database, snapshot: &Snapshot, spec: &str) -> Result<Vec<File>, CmdError> {
         Self::matching(db, snapshot.id, spec, What::Dirs)
     }
@@ -317,6 +349,10 @@ impl File {
 
     pub fn insert_ref(&self, db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
         db.execute(INSERT_REF, params![snapshot.id, self.id])
+    }
+
+    pub fn insert_history_sync_mode(db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
+        db.execute(INSERT_HISTORY_SYNC_MODE, params![snapshot.id])
     }
 
     pub fn archive(&mut self, db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {

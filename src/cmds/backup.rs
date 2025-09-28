@@ -103,6 +103,9 @@ impl Command for BackupCommand {
         if !self.args.dry_run {
             snapshot.mark_completed(&db)?;
         }
+        if !self.args.config.incremental {
+            File::insert_history_sync_mode(&db, &snapshot)?;
+        }
         if !self.args.quiet {
             println!();
             Snapshot::header();

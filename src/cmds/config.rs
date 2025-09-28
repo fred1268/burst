@@ -287,6 +287,7 @@ impl ConfigCommand {
             File::delete_all_refs_keep_snapshot(db, latest_snapshot.id, &PathBuf::new(), &PathBuf::new())?;
             self.remove_orphans(db, fs)?;
             latest_snapshot.delete_all_except(db)?;
+            File::insert_history_sync_mode(db, &latest_snapshot)?;
         }
         Ok(())
     }
