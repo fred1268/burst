@@ -294,9 +294,9 @@ impl File {
         sql.push_str(" WHERE snapshot_id=?2 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?1) UNION ");
         sql.push_str(READ_SYNC_MODE);
         // in current snapshot, but not in previous
-        sql.push_str(
-            " WHERE snapshot_id=?1 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) ORDER BY path ASC, name",
-        );
+        sql.push_str(" WHERE snapshot_id=?1 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) UNION ");
+        sql.push_str(READ_SYNC_MODE);
+        sql.push_str(" fh WHERE snapshot_id=?1 AND path||name IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2 AND (fh.modified!= modified OR fh.size!= size)) ORDER BY path ASC, name");
         File::list(db, &sql, params![snapshot.id, previous_snapshot.id])
     }
 
