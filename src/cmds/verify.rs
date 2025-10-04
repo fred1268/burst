@@ -3,7 +3,8 @@ use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::constants::{BURST_DIRECTORY, BURST_VERSION_DIR};
 use crate::cmds::file::File;
-use crate::tools::cmderror::CmdError::{self, InvalidOption, InvalidBackupDirectory, IoError};
+use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
+use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
@@ -144,9 +145,9 @@ impl VerifyCommand {
             println!("  Directory {:?}", dir);
         }
         let mut dirs: Vec<PathBuf> = vec![];
-        let entries = fs::read_dir(dir).map_err(|err| IoError(String::from("Cannot iterate entries"), err.to_string()))?;
+        let entries = fs::read_dir(dir).map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
         for entry in entries {
-            let entry = entry.map_err(|err| IoError(String::from("Invalid entry"), err.to_string()))?;
+            let entry = entry.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))?;
             let p = entry.path();
             if p.ends_with(BURST_DIRECTORY) || p.ends_with(BURST_VERSION_DIR) {
                 continue;
@@ -154,8 +155,7 @@ impl VerifyCommand {
             match File::find_entry(
                 db,
                 &PathBuf::from(
-                    p.strip_prefix(&self.args.config.target)
-                        .map_err(|err| IoError(String::from("Cannot strip prefix"), err.to_string()))?,
+                    p.strip_prefix(&self.args.config.target).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
                 ),
             )? {
                 Some(_) => {

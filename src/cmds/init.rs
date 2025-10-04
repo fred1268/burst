@@ -1,7 +1,8 @@
 use crate::args::init::InitArgs;
 use crate::cmds::command;
 use crate::cmds::command::Command;
-use crate::tools::cmderror::CmdError::{self, InvalidSourceDirectory, InvalidBackupDirectory, IoError};
+use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidSourceDirectory};
+use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
 use crate::tools::fs::FileSystem;
 use std::fs;
@@ -24,13 +25,12 @@ impl From<InitArgs> for InitCommand {
 
 impl Command for InitCommand {
     fn validate(&mut self) -> Result<(), CmdError> {
-        let mut exist = fs::exists(&self.args.config.source)
-            .map_err(|err| IoError(String::from(self.args.config.source.to_str().unwrap()), err.to_string()))?;
+        let mut exist =
+            fs::exists(&self.args.config.source).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.source, err)))?;
         if !exist {
             return Err(InvalidSourceDirectory());
         }
-        exist = fs::exists(&self.args.config.target)
-            .map_err(|err| IoError(String::from(self.args.config.target.to_str().unwrap()), err.to_string()))?;
+        exist = fs::exists(&self.args.config.target).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
         if !exist {
             return Err(InvalidBackupDirectory());
         }
@@ -86,19 +86,18 @@ impl InitCommand {
     fn create_directories(&mut self) -> Result<(), CmdError> {
         // target directory must not already contain a burst directory
         let mut target = FileSystem::target_backup_dir(&self.args.config.target);
-        let mut exist =
-            fs::exists(&target).map_err(|err| IoError(String::from(self.args.config.target.to_str().unwrap()), err.to_string()))?;
+        let mut exist = fs::exists(&target).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
         if exist {
             return Err(CmdError::AlreadyInitialized());
         }
-        fs::create_dir_all(&target).map_err(|err| IoError(String::from(target.to_str().unwrap()), err.to_string()))?;
+        fs::create_dir_all(&target).map_err(|err| CmdError::IoError(IoError::from(&target, err)))?;
         // create local backup directory
         target = FileSystem::home_backup_dir(&self.args.config.target);
-        exist = fs::exists(&target).map_err(|err| IoError(String::from(self.args.config.target.to_str().unwrap()), err.to_string()))?;
+        exist = fs::exists(&target).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
         if exist {
             return Err(CmdError::AlreadyInitialized());
         }
-        fs::create_dir_all(&target).map_err(|err| IoError(String::from(target.to_str().unwrap()), err.to_string()))?;
+        fs::create_dir_all(&target).map_err(|err| CmdError::IoError(IoError::from(&target, err)))?;
         Ok(())
     }
 }

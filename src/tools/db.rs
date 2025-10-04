@@ -1,5 +1,5 @@
 use crate::cmds::constants::BURST_METADATA_FILE;
-use crate::tools::cmderror::CmdError::{self, DbError};
+use crate::tools::cmderror::{CmdError, DbError};
 use crate::tools::fs::FileSystem;
 use crate::tools::version::VERSION_1_1;
 use rusqlite::{Connection, Params, Result, Row, params};
@@ -38,11 +38,11 @@ pub struct Database {
 
 impl Database {
     pub fn open(target: &Path) -> Result<Database, CmdError> {
-        rusqlite_regex::enable_auto_extension().map_err(|err| DbError(String::from("Cannot open database"), err.to_string()))?;
+        rusqlite_regex::enable_auto_extension().map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?;
         let home_dir = FileSystem::home_backup_dir(target);
         let db_file = home_dir.join(BURST_METADATA_FILE);
         let db = Database {
-            connection: Connection::open(&db_file).map_err(|err| DbError(String::from("Cannot open database"), err.to_string()))?,
+            connection: Connection::open(&db_file).map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?,
         };
         db.check_tables()?;
         db.upgrade()?;
@@ -81,16 +81,16 @@ impl Database {
     where
         P: Params,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| DbError(String::from(sql), err.to_string()))?;
-        stmt.exists(params).map_err(|err| DbError(String::from(sql), err.to_string()))
+        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        stmt.exists(params).map_err(|err| CmdError::DbError(DbError::from(sql, err)))
     }
 
     pub fn execute<P>(&self, sql: &str, params: P) -> Result<(), CmdError>
     where
         P: Params,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| DbError(String::from(sql), err.to_string()))?;
-        stmt.execute(params).map_err(|err| DbError(String::from(sql), err.to_string()))?;
+        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        stmt.execute(params).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
         Ok(())
     }
 
@@ -99,12 +99,12 @@ impl Database {
         P: Params,
         F: FnOnce(&Row<'_>) -> Result<T>,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| DbError(String::from(sql), err.to_string()))?;
+        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
         match stmt.query_one(params, f) {
             Ok(one) => Ok(Some(one)),
             Err(err) => match err {
                 rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                _ => Err(CmdError::DbError(String::from(sql), err.to_string())),
+                _ => Err(CmdError::DbError(DbError::from(sql, err))),
             },
         }
     }
@@ -114,11 +114,11 @@ impl Database {
         P: Params,
         F: FnMut(&Row<'_>) -> Result<T>,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| DbError(String::from(sql), err.to_string()))?;
-        let list = stmt.query_map(params, f).map_err(|err| DbError(String::from(sql), err.to_string()))?;
+        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        let list = stmt.query_map(params, f).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
         let mut result: Vec<T> = Vec::new();
         for one in list {
-            let one = one.map_err(|err| DbError(String::from(sql), err.to_string()))?;
+            let one = one.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
             result.push(one);
         }
         Ok(result)
@@ -129,7 +129,9 @@ impl Database {
             let v: Option<String> = self.query_one(VER_READ, params![], |row| row.get(0))?;
             let version = match v {
                 Some(v) => v,
-                None => return Err(DbError(String::from("Version"), String::from("Not found"))),
+                None => {
+                    return Err(CmdError::GenericError(String::from("Cannot upgrade database: version not found")));
+                }
             };
             match version.as_str() {
                 "1.0" => self.upgrade_to_1_1()?,

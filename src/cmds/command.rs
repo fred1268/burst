@@ -9,7 +9,8 @@ use crate::cmds::init::InitCommand;
 use crate::cmds::list::ListCommand;
 use crate::cmds::restore::RestoreCommand;
 use crate::cmds::verify::VerifyCommand;
-use crate::tools::cmderror::CmdError::{self, IoError, NoRemote};
+use crate::tools::cmderror::CmdError::{self, NoRemote};
+use crate::tools::cmderror::IoError;
 use crate::tools::fs::FileSystem;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ pub fn config_file(target: &Path) -> PathBuf {
 pub fn start(target: &Path) -> Result<(), CmdError> {
     let home_dir = FileSystem::home_backup_dir(target);
     let target_dir = target.join(BURST_DIRECTORY);
-    let mut exist = fs::exists(&home_dir).map_err(|err| IoError(String::from(home_dir.to_str().unwrap()), err.to_string()))?;
+    let mut exist = fs::exists(&home_dir).map_err(|err| CmdError::IoError(IoError::from(&home_dir, err)))?;
     if !exist {
         return Err(CmdError::InvalidBackupDirectory());
     }
@@ -51,22 +52,22 @@ pub fn start(target: &Path) -> Result<(), CmdError> {
     let local_db = home_dir.join(BURST_METADATA_FILE);
     let remote_cfg = target_dir.join(BURST_CONFIG_FILE);
     let remote_db = target_dir.join(BURST_METADATA_FILE);
-    exist = fs::exists(&remote_cfg).map_err(|err| IoError(String::from(remote_cfg.to_str().unwrap()), err.to_string()))?;
+    exist = fs::exists(&remote_cfg).map_err(|err| CmdError::IoError(IoError::from(&remote_cfg, err)))?;
     if !exist {
         return Err(NoRemote());
     }
-    exist = fs::exists(&remote_db).map_err(|err| IoError(String::from(remote_db.to_str().unwrap()), err.to_string()))?;
+    exist = fs::exists(&remote_db).map_err(|err| CmdError::IoError(IoError::from(&remote_db, err)))?;
     if !exist {
         return Err(NoRemote());
     }
 
-    exist = fs::exists(&local_cfg).map_err(|err| IoError(String::from(local_cfg.to_str().unwrap()), err.to_string()))?;
+    exist = fs::exists(&local_cfg).map_err(|err| CmdError::IoError(IoError::from(&local_cfg, err)))?;
     if !exist {
-        fs::copy(&remote_cfg, &local_cfg).map_err(|err| IoError(String::from("Configuration"), err.to_string()))?;
+        fs::copy(&remote_cfg, &local_cfg).map_err(|_| CmdError::GenericError(String::from("Cannot copy configuration")))?;
     }
-    exist = fs::exists(&local_db).map_err(|err| IoError(String::from(local_db.to_str().unwrap()), err.to_string()))?;
+    exist = fs::exists(&local_db).map_err(|err| CmdError::IoError(IoError::from(&local_db, err)))?;
     if !exist {
-        fs::copy(&remote_db, &local_db).map_err(|err| IoError(String::from("Metadata"), err.to_string()))?;
+        fs::copy(&remote_db, &local_db).map_err(|_| CmdError::GenericError(String::from("Cannot copy metadata")))?;
     }
     Ok(())
 }
@@ -79,12 +80,12 @@ pub fn stop(target: &Path) -> Result<(), CmdError> {
     let local_db = home_dir.join(BURST_METADATA_FILE);
     let remote_cfg = target_dir.join(BURST_CONFIG_FILE);
     let remote_db = target_dir.join(BURST_METADATA_FILE);
-    let exist = fs::exists(&target_dir).map_err(|err| IoError(String::from(target_dir.to_str().unwrap()), err.to_string()))?;
+    let exist = fs::exists(&target_dir).map_err(|err| CmdError::IoError(IoError::from(&target_dir, err)))?;
     if !exist {
         return Ok(());
     }
 
-    fs::copy(&local_cfg, &remote_cfg).map_err(|err| IoError(String::from("Configuration"), err.to_string()))?;
-    fs::copy(&local_db, &remote_db).map_err(|err| IoError(String::from("Metadata"), err.to_string()))?;
+    fs::copy(&local_cfg, &remote_cfg).map_err(|_| CmdError::GenericError(String::from("Cannot copy configuration")))?;
+    fs::copy(&local_db, &remote_db).map_err(|_| CmdError::GenericError(String::from("Cannot copy metadata")))?;
     Ok(())
 }

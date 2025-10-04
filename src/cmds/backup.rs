@@ -2,7 +2,8 @@ use crate::args::backup::BackupArgs;
 use crate::cmds::command::{self, Command};
 use crate::cmds::file::File;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption, IoError};
+use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
+use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
 use crate::tools::fs::FileSystem;
 use std::fs;
@@ -122,16 +123,16 @@ impl BackupCommand {
         let mut previous_children = File::children_dirs(
             db,
             &self.previous_snapshot,
-            root.strip_prefix(&self.args.config.source).map_err(|err| IoError(String::from("Cannot strip prefix"), err.to_string()))?,
+            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
         )?;
         let mut children: Vec<PathBuf> = vec![];
         let mut files: Vec<File> = vec![];
-        let entries = fs::read_dir(root).map_err(|err| IoError(String::from("Cannot iterate entries"), err.to_string()))?;
+        let entries = fs::read_dir(root).map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
         let mut contains_files = false;
         for entry in entries {
-            let entry = entry.map_err(|err| IoError(String::from("Invalid entry"), err.to_string()))?;
+            let entry = entry.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))?;
             let p = entry.path();
-            let metadata = fs::symlink_metadata(&p).map_err(|err| IoError(String::from(p.to_str().unwrap()), err.to_string()))?;
+            let metadata = fs::symlink_metadata(&p).map_err(|err| CmdError::IoError(IoError::from(&p, err)))?;
             if !self.args.config.follow_symlinks && metadata.is_symlink() {
                 if self.args.verbose {
                     println!("  Excluded symlink {:?}", entry.file_name())
@@ -154,8 +155,7 @@ impl BackupCommand {
             }
             if p.is_dir() {
                 let name = PathBuf::from(
-                    p.strip_prefix(&self.args.config.source)
-                        .map_err(|err| IoError(String::from("Cannot strip prefix"), err.to_string()))?,
+                    p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
                 );
                 if previous_children.contains_key(&name) {
                     previous_children.remove(&name).unwrap();
@@ -165,7 +165,7 @@ impl BackupCommand {
             }
             contains_files = true;
             files.push(File::from_metadata(
-                p.strip_prefix(&self.args.config.source).map_err(|err| IoError(String::from("Cannot strip prefix"), err.to_string()))?,
+                p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
                 metadata,
             ));
         }
@@ -176,7 +176,7 @@ impl BackupCommand {
             db,
             fs,
             snapshot,
-            root.strip_prefix(&self.args.config.source).map_err(|err| IoError(String::from("Cannot strip prefix"), err.to_string()))?,
+            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
             files,
         )?;
         let mut n = children.len();
@@ -184,7 +184,7 @@ impl BackupCommand {
             if self.process_directory(db, fs, snapshot, child)? {
                 let name = child
                     .strip_prefix(&self.args.config.source)
-                    .map_err(|err| IoError(String::from("Cannot strip prefix"), err.to_string()))?;
+                    .map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?;
                 match File::find_entry(db, name)? {
                     Some(dir) => {
                         if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot)?) {
@@ -192,8 +192,7 @@ impl BackupCommand {
                         }
                     }
                     None => {
-                        let metadata =
-                            fs::symlink_metadata(child).map_err(|err| IoError(String::from(child.to_str().unwrap()), err.to_string()))?;
+                        let metadata = fs::symlink_metadata(child).map_err(|err| CmdError::IoError(IoError::from(child, err)))?;
                         let dir = &mut File::from_metadata(name, metadata);
                         if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot)?) {
                             dir.insert(db, snapshot)?;

@@ -343,7 +343,7 @@ impl File {
                 self.id = id;
                 self.insert_ref(db, snapshot)
             }
-            None => Err(CmdError::DbError(String::from(INSERT), String::from("expecting id"))),
+            None => Err(CmdError::GenericError(String::from(INSERT))),
         }
     }
 

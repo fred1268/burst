@@ -1,7 +1,11 @@
+use std::fmt::{Display, Formatter, Result};
+use std::path::{Path, PathBuf};
+
 #[derive(Debug)]
 pub enum CmdError {
-    IoError(String, String),
-    DbError(String, String),
+    GenericError(String),
+    IoError(IoError),
+    DbError(DbError),
     InvalidBackupDirectory(),
     InvalidSourceDirectory(),
     InvalidRestoreDirectory(),
@@ -13,11 +17,12 @@ pub enum CmdError {
     NoRemote(),
 }
 
-impl std::fmt::Display for CmdError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl Display for CmdError {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
-            Self::IoError(file, err) => write!(f, "{}: {}", file, err),
-            Self::DbError(file, err) => write!(f, "{}: {}", file, err),
+            Self::GenericError(msg) => write!(f, "{}", msg),
+            Self::IoError(err) => write!(f, "{}", err),
+            Self::DbError(err) => write!(f, "{}", err),
             Self::InvalidBackupDirectory() => write!(f, "Directory does not exist or is not a valid backup directory"),
             Self::InvalidSourceDirectory() => write!(f, "Directory does not exist or is not a valid source directory"),
             Self::InvalidRestoreDirectory() => write!(f, "Directory does not exist or is not a valid restore directory"),
@@ -25,10 +30,65 @@ impl std::fmt::Display for CmdError {
             Self::MissingCommand => write!(f, "No command provided"),
             Self::InvalidParameters => write!(f, "Invalid parameters"),
             Self::InvalidParameter(param) => write!(f, "Invalid or unknown parameter {}", param),
-            Self::InvalidOption(msg) => write!(f, "{}", msg),
+            Self::InvalidOption(msg) => write!(f, "Invalid option {}", msg),
             Self::NoRemote() => write!(f, ""),
         }
     }
 }
 
 impl std::error::Error for CmdError {}
+
+#[derive(Debug)]
+pub enum PathBufOrString {
+    PathBuf(PathBuf),
+    String(String),
+}
+
+impl Display for PathBufOrString {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        match self {
+            PathBufOrString::PathBuf(path) => write!(f, "{:?}", path),
+            PathBufOrString::String(str) => write!(f, "{}", str),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct DbError {
+    pub source: rusqlite::Error,
+    pub culprit: String,
+}
+
+impl Display for DbError {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{}: {}", self.culprit, self.source)
+    }
+}
+
+impl DbError {
+    pub fn from(culprit: &str, err: rusqlite::Error) -> Self {
+        DbError { culprit: String::from(culprit), source: err }
+    }
+}
+
+#[derive(Debug)]
+pub struct IoError {
+    pub source: std::io::Error,
+    pub culprit: PathBuf,
+}
+
+impl Display for IoError {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        write!(f, "{:?}: {}", self.culprit, self.source)
+    }
+}
+
+impl IoError {
+    pub fn from(culprit: &Path, err: std::io::Error) -> Self {
+        IoError { culprit: PathBuf::from(culprit), source: err }
+    }
+
+    pub fn from_str(culprit: &str, err: std::io::Error) -> Self {
+        IoError { culprit: PathBuf::from(culprit), source: err }
+    }
+}
