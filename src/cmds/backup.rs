@@ -123,7 +123,7 @@ impl BackupCommand {
         let mut previous_children = File::children_dirs(
             db,
             &self.previous_snapshot,
-            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
+            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
         )?;
         let mut children: Vec<PathBuf> = vec![];
         let mut files: Vec<File> = vec![];
@@ -155,7 +155,8 @@ impl BackupCommand {
             }
             if p.is_dir() {
                 let name = PathBuf::from(
-                    p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
+                    p.strip_prefix(&self.args.config.source)
+                        .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                 );
                 if previous_children.contains_key(&name) {
                     previous_children.remove(&name).unwrap();
@@ -165,7 +166,7 @@ impl BackupCommand {
             }
             contains_files = true;
             files.push(File::from_metadata(
-                p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
+                p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                 metadata,
             ));
         }
@@ -176,7 +177,7 @@ impl BackupCommand {
             db,
             fs,
             snapshot,
-            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
+            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
             files,
         )?;
         let mut n = children.len();
@@ -184,7 +185,7 @@ impl BackupCommand {
             if self.process_directory(db, fs, snapshot, child)? {
                 let name = child
                     .strip_prefix(&self.args.config.source)
-                    .map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?;
+                    .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", child)))?;
                 match File::find_entry(db, name)? {
                     Some(dir) => {
                         if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot)?) {

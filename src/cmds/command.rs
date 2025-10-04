@@ -63,11 +63,11 @@ pub fn start(target: &Path) -> Result<(), CmdError> {
 
     exist = fs::exists(&local_cfg).map_err(|err| CmdError::IoError(IoError::from(&local_cfg, err)))?;
     if !exist {
-        fs::copy(&remote_cfg, &local_cfg).map_err(|_| CmdError::GenericError(String::from("Cannot copy configuration")))?;
+        fs::copy(&remote_cfg, &local_cfg).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
     }
     exist = fs::exists(&local_db).map_err(|err| CmdError::IoError(IoError::from(&local_db, err)))?;
     if !exist {
-        fs::copy(&remote_db, &local_db).map_err(|_| CmdError::GenericError(String::from("Cannot copy metadata")))?;
+        fs::copy(&remote_db, &local_db).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy metadata", err)))?;
     }
     Ok(())
 }
@@ -85,7 +85,7 @@ pub fn stop(target: &Path) -> Result<(), CmdError> {
         return Ok(());
     }
 
-    fs::copy(&local_cfg, &remote_cfg).map_err(|_| CmdError::GenericError(String::from("Cannot copy configuration")))?;
-    fs::copy(&local_db, &remote_db).map_err(|_| CmdError::GenericError(String::from("Cannot copy metadata")))?;
+    fs::copy(&local_cfg, &remote_cfg).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
+    fs::copy(&local_db, &remote_db).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy metadata", err)))?;
     Ok(())
 }

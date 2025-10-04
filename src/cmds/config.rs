@@ -168,11 +168,11 @@ impl ConfigCommand {
             }
             "hash_comparison" => {
                 self.args.config.hash_comparison =
-                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(String::from(&self.args.value)))?
+                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
             }
             "follow_symlinks" => {
                 self.args.config.follow_symlinks =
-                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(String::from(&self.args.value)))?
+                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
             }
             _ => return Err(InvalidOption(format!("Invalid key {}", self.args.key))),
         }

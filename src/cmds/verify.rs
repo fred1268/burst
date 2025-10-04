@@ -155,7 +155,8 @@ impl VerifyCommand {
             match File::find_entry(
                 db,
                 &PathBuf::from(
-                    p.strip_prefix(&self.args.config.target).map_err(|_| CmdError::GenericError(String::from("Cannot strip prefix")))?,
+                    p.strip_prefix(&self.args.config.target)
+                        .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                 ),
             )? {
                 Some(_) => {
