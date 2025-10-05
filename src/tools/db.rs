@@ -144,7 +144,7 @@ impl Database {
 
     fn upgrade_to_1_1(&self) -> Result<(), CmdError> {
         self.execute(FH_TABLE, ())?;
-        self.execute("INSERT INTO filehistory SELECT id, snapshot_id, digest, path, archive, name, size, compressed_size, encrypted, created, modified, deleted_sid, is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.snapshot_id WHERE sf.snapshot_id IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT 1)", ())?;
+        self.execute("INSERT INTO filehistory SELECT id, snapshot_id, digest, path, archive, name, size, compressed_size, encrypted, created, modified, deleted_sid, is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.version_id WHERE sf.snapshot_id IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT 1)", ())?;
         self.execute(VER_UPDATE, params![VERSION_1_1])
     }
 
