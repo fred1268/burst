@@ -39,21 +39,6 @@ impl Display for CmdError {
 impl std::error::Error for CmdError {}
 
 #[derive(Debug)]
-pub enum PathBufOrString {
-    PathBuf(PathBuf),
-    String(String),
-}
-
-impl Display for PathBufOrString {
-    fn fmt(&self, f: &mut Formatter) -> Result {
-        match self {
-            PathBufOrString::PathBuf(path) => write!(f, "{:?}", path),
-            PathBufOrString::String(str) => write!(f, "{}", str),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct DbError {
     pub source: rusqlite::Error,
     pub culprit: String,
