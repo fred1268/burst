@@ -79,7 +79,7 @@ impl BackupConfig {
             self.parse(map)?;
             return Ok(());
         }
-        Err(CmdError::GenericError(String::from("Cannot read configuration")))
+        Err(CmdError::GenericError(format!("Cannot read configuration {:?}", filename)))
     }
 
     fn parse(&mut self, map: &LinkedHashMap<Yaml, Yaml>) -> Result<(), CmdError> {
