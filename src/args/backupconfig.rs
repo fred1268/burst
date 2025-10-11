@@ -1,5 +1,6 @@
 use crate::cmds::constants::BURST_CONFIG_FILE;
-use crate::tools::cmderror::CmdError::{self, InvalidOption, IoError};
+use crate::tools::cmderror::CmdError::{self, InvalidOption};
+use crate::tools::cmderror::IoError;
 use crate::tools::fs::FileSystem;
 use hashlink::linked_hash_map::LinkedHashMap;
 use regex::Regex;
@@ -72,13 +73,13 @@ impl fmt::Display for BackupConfig {
 
 impl BackupConfig {
     pub fn read(&mut self, filename: &Path) -> Result<(), CmdError> {
-        let cfg = fs::read_to_string(filename).map_err(|err| IoError(String::from(filename.to_str().unwrap()), err.to_string()))?;
-        let yaml = YamlLoader::load_from_str(&cfg).map_err(|err| IoError(String::from(filename.to_str().unwrap()), err.to_string()))?;
+        let cfg = fs::read_to_string(filename).map_err(|err| CmdError::IoError(IoError::from(filename, err)))?;
+        let yaml = YamlLoader::load_from_str(&cfg).map_err(|err| CmdError::IoError(IoError::from(filename, std::io::Error::other(err))))?;
         if let Some(map) = yaml[0].as_hash() {
             self.parse(map)?;
             return Ok(());
         }
-        Err(CmdError::IoError(String::from(filename.to_str().unwrap()), String::from("Cannot parse yaml")))
+        Err(CmdError::GenericError(format!("Cannot read configuration {:?}", filename)))
     }
 
     fn parse(&mut self, map: &LinkedHashMap<Yaml, Yaml>) -> Result<(), CmdError> {
@@ -140,7 +141,8 @@ impl BackupConfig {
 
     pub fn write(&self) -> Result<(), CmdError> {
         let home_dir = FileSystem::home_backup_dir(&self.target);
-        fs::write(home_dir.join(BURST_CONFIG_FILE), self.as_str()).map_err(|err| IoError(String::from(BURST_CONFIG_FILE), err.to_string()))
+        fs::write(home_dir.join(BURST_CONFIG_FILE), self.as_str())
+            .map_err(|err| CmdError::IoError(IoError::from_str(BURST_CONFIG_FILE, err)))
     }
 
     pub fn as_str(&self) -> String {

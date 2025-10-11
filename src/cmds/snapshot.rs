@@ -85,6 +85,12 @@ impl Snapshot {
         Snapshot::one(db, &sql, params![id])
     }
 
+    pub fn get_previous_sync_mode(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
+        let mut sql = String::from(READ);
+        sql.push_str(" WHERE id<?1 ORDER BY created DESC LIMIT 1");
+        Snapshot::one(db, &sql, params![id])
+    }
+
     pub fn get(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id=?1");

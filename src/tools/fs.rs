@@ -1,6 +1,6 @@
 use crate::cmds::constants::BURST_DIRECTORY;
 use crate::cmds::file::File;
-use crate::tools::cmderror::CmdError::{self, IoError};
+use crate::tools::cmderror::{CmdError, IoError};
 use sha2::{Digest, Sha256};
 use std::io::{BufReader, ErrorKind, Read};
 use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
@@ -33,9 +33,9 @@ impl FileSystem {
             true => PathBuf::from(path.strip_suffix(MAIN_SEPARATOR).unwrap()),
             false => PathBuf::from(path),
         };
-        let exist = fs::exists(&dir).map_err(|err| IoError(String::from(dir.to_str().unwrap()), err.to_string()))?;
+        let exist = fs::exists(&dir).map_err(|err| CmdError::IoError(IoError::from_str(path, err)))?;
         if exist {
-            return dir.canonicalize().map_err(|err| IoError(String::from(dir.to_str().unwrap()), err.to_string()));
+            return dir.canonicalize().map_err(|err| CmdError::IoError(IoError::from(&dir, err)));
         }
         if path.ends_with(MAIN_SEPARATOR) {
             return Ok(PathBuf::from(path.strip_suffix(MAIN_SEPARATOR).unwrap()));
@@ -56,11 +56,11 @@ impl FileSystem {
 
     pub fn check_home_dir() -> Result<(), CmdError> {
         let home = Self::home_dir();
-        let exist = fs::exists(&home).map_err(|err| IoError(String::from(home.to_str().unwrap()), err.to_string()))?;
+        let exist = fs::exists(&home).map_err(|err| CmdError::IoError(IoError::from(&home, err)))?;
         if exist {
             return Ok(());
         }
-        fs::create_dir_all(&home).map_err(|err| IoError(String::from(home.to_str().unwrap()), err.to_string()))
+        fs::create_dir_all(&home).map_err(|err| CmdError::IoError(IoError::from(&home, err)))
     }
 
     fn other_os_separator() -> char {
@@ -74,16 +74,15 @@ impl FileSystem {
     pub fn copy_new_file(&self, file: &mut File, compare_hash: bool) -> Result<(), CmdError> {
         let to = file.archive_dir(&self.target);
         if !to.exists() {
-            fs::create_dir_all(&to).map_err(|err| IoError(String::from(to.to_str().unwrap()), err.to_string()))?;
+            fs::create_dir_all(&to).map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
         }
-        fs::copy(file.source_name(&self.source), to.join(&file.name))
-            .map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))?;
+        fs::copy(file.source_name(&self.source), to.join(&file.name)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         if compare_hash {
             let digest = self.compute_digest(file, &self.target)?;
             if digest != file.digest {
                 println!("Warning: hash comparison failed for {:?}. Retrying", file.fullname());
                 fs::copy(file.source_name(&self.source), to.join(&file.name))
-                    .map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))?;
+                    .map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
                 let hash = self.compute_digest(file, &self.target)?;
                 if hash != file.digest {
                     println!("Error: hash comparison failed for {:?}", file.fullname());
@@ -95,12 +94,11 @@ impl FileSystem {
 
     pub fn compute_digest(&self, file: &File, path: &Path) -> Result<String, CmdError> {
         let mut hasher = Sha256::new();
-        let f =
-            fs::File::open(file.source_name(path)).map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))?;
+        let f = fs::File::open(file.source_name(path)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         let mut reader = BufReader::new(f);
         let mut buffer: [u8; 4096] = [0u8; 4096];
         loop {
-            let read = reader.read(&mut buffer[..]).map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))?;
+            let read = reader.read(&mut buffer[..]).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
             hasher.update(buffer);
             if read < 4096 {
                 break;
@@ -113,15 +111,14 @@ impl FileSystem {
     pub fn archive_file(&self, _sid: u64, file: &File) -> Result<(), CmdError> {
         let to: PathBuf = file.archive_dir(&self.target);
         if !to.exists() {
-            fs::create_dir_all(&to).map_err(|err| IoError(String::from(to.to_str().unwrap()), err.to_string()))?;
+            fs::create_dir_all(&to).map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
         }
-        fs::rename(file.source_name(&self.target), to.join(&file.name))
-            .map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))
+        fs::rename(file.source_name(&self.target), to.join(&file.name)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))
     }
 
     pub fn unarchive_file(&self, _sid: u64, file: &File) -> Result<(), CmdError> {
         fs::rename(file.archive_name(&self.target), file.source_name(&self.target))
-            .map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))?;
+            .map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         if let Some(parent) = file.archive_name(&self.target).parent() {
             self.recurse_remove_empty_dir(parent)?;
         }
@@ -132,8 +129,7 @@ impl FileSystem {
         match file.is_dir {
             true => self.remove_dir(file),
             false => {
-                fs::remove_file(file.archive_name(&self.target))
-                    .map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))?;
+                fs::remove_file(file.archive_name(&self.target)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
                 if let Some(parent) = file.archive_name(&self.target).parent() {
                     self.recurse_remove_empty_dir(parent)?;
                 }
@@ -156,15 +152,14 @@ impl FileSystem {
             false => {
                 let to = to_dir.join(&file.path);
                 if !to.exists() {
-                    fs::create_dir_all(&to).map_err(|err| IoError(String::from(to.to_str().unwrap()), err.to_string()))?;
+                    fs::create_dir_all(&to).map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
                 }
                 to.join(&file.name)
             }
         };
         let conflict = to.exists() && !overwrite;
         if !conflict {
-            fs::copy(file.archive_name(&self.target), &to)
-                .map_err(|err| IoError(String::from(file.name.to_str().unwrap()), err.to_string()))?;
+            fs::copy(file.archive_name(&self.target), &to).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         }
         Ok(conflict)
     }
@@ -179,7 +174,7 @@ impl FileSystem {
                 },
                 Err(err) => match err.kind() {
                     ErrorKind::DirectoryNotEmpty | ErrorKind::NotFound => break,
-                    _ => return Err(IoError(String::from(dir.to_str().unwrap()), err.to_string())),
+                    _ => return Err(CmdError::IoError(IoError::from(dir, err))),
                 },
             }
         }

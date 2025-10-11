@@ -168,11 +168,11 @@ impl ConfigCommand {
             }
             "hash_comparison" => {
                 self.args.config.hash_comparison =
-                    self.args.value.parse::<bool>().map_err(|err| CmdError::IoError(self.args.value.clone(), err.to_string()))?
+                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
             }
             "follow_symlinks" => {
                 self.args.config.follow_symlinks =
-                    self.args.value.parse::<bool>().map_err(|err| CmdError::IoError(self.args.value.clone(), err.to_string()))?
+                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
             }
             _ => return Err(InvalidOption(format!("Invalid key {}", self.args.key))),
         }
@@ -287,6 +287,7 @@ impl ConfigCommand {
             File::delete_all_refs_keep_snapshot(db, latest_snapshot.id, &PathBuf::new(), &PathBuf::new())?;
             self.remove_orphans(db, fs)?;
             latest_snapshot.delete_all_except(db)?;
+            File::insert_history_sync_mode(db, &latest_snapshot)?;
         }
         Ok(())
     }
