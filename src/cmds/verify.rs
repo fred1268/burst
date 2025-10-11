@@ -93,8 +93,8 @@ impl VerifyCommand {
         if self.args.verbose {
             println!("Verifying hash")
         }
-        let entries = File::filesystem_entries(db)?;
-        for entry in &entries {
+        let mut entries = File::filesystem_entries(db)?;
+        for entry in &mut entries {
             if entry.is_dir {
                 if self.args.verbose {
                     println!("  Directory {:?}", entry.fullname())
@@ -105,6 +105,10 @@ impl VerifyCommand {
             if digest != entry.digest {
                 self.warnings += 1;
                 println!("Warning: hash mismatch for {:?}", entry.fullname());
+                if self.args.fix {
+                    entry.digest = digest;
+                    entry.update(db)?;
+                }
             }
         }
         Ok(())
