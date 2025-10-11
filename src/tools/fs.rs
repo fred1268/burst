@@ -6,6 +6,8 @@ use std::io::{BufReader, ErrorKind, Read};
 use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
 use std::{env, fs};
 
+const BUF_SIZE: usize = 65536;
+
 pub struct FileSystem {
     source: PathBuf,
     target: PathBuf,
@@ -96,11 +98,11 @@ impl FileSystem {
         let mut hasher = Sha256::new();
         let f = fs::File::open(file.source_name(path)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         let mut reader = BufReader::new(f);
-        let mut buffer: [u8; 4096] = [0u8; 4096];
+        let mut buffer: [u8; BUF_SIZE] = [0u8; BUF_SIZE];
         loop {
             let read = reader.read(&mut buffer[..]).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
             hasher.update(&buffer[0..read]);
-            if read < 4096 {
+            if read < BUF_SIZE {
                 break;
             }
         }
