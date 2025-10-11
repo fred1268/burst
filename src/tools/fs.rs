@@ -99,7 +99,7 @@ impl FileSystem {
         let mut buffer: [u8; 4096] = [0u8; 4096];
         loop {
             let read = reader.read(&mut buffer[..]).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
-            hasher.update(buffer);
+            hasher.update(&buffer[0..read]);
             if read < 4096 {
                 break;
             }
