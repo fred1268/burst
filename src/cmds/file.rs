@@ -37,6 +37,8 @@ const DELETE: &str = "DELETE FROM fileversions WHERE id=?1";
 
 const DELETE_REF: &str = "DELETE FROM snapshotfiles";
 
+const DELETE_SYNC_MODE: &str = "DELETE FROM filehistory";
+
 const DELETE_SNAPSHOT: &str = "DELETE FROM snapshotfiles WHERE snapshot_id=?1";
 
 enum What {
@@ -376,6 +378,12 @@ impl File {
         let mut sql = String::from(DELETE_REF);
         sql.push_str(" WHERE version_id=?1");
         db.execute(&sql, params![self.id])
+    }
+
+    pub fn delete_sync_mode(db: &Database, sid: u64) -> Result<(), CmdError> {
+        let mut sql = String::from(DELETE_SYNC_MODE);
+        sql.push_str(" WHERE snapshot_id=?1");
+        db.execute(&sql, params![sid])
     }
 
     pub fn delete_all_refs_keep_snapshot(db: &Database, sid: u64, path: &Path, name: &Path) -> Result<(), CmdError> {

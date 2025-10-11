@@ -92,52 +92,9 @@ impl Command for DeleteCommand {
                 }
             }
         }
-        for sid in &self.args.sids {
-            if !self.args.quiet {
-                println!("Deleting snapshot {} files", *sid);
-            }
-            if !self.args.dry_run {
-                if !self.args.pattern.is_empty() {
-                    File::delete_files(&db, *sid, &self.args.pattern)?;
-                } else {
-                    File::delete_all_by_sid(&db, *sid)?;
-                    Snapshot::delete_by_id(&db, *sid)?;
-                }
-            }
-        }
-        let files = File::orphans(&db)?;
-        for file in files {
-            if self.args.verbose {
-                println!("  Removing file {}", file);
-            }
-            if !self.args.dry_run {
-                file.delete(&db)?;
-                fs.remove_file(&file)?;
-            }
-        }
-        if let Some(snapshot) = Snapshot::get_latest(&db)? {
-            let files = File::files(&db, &snapshot)?;
-            for mut file in files {
-                if file.is_archived() {
-                    if self.args.verbose {
-                        println!("  Unarchiving file {}", &file);
-                    }
-                    if !self.args.dry_run {
-                        self.unarchive_file(&db, &fs, &snapshot, &mut file)?;
-                    }
-                }
-            }
-            let dirs = File::dirs(&db, &snapshot)?;
-            for mut dir in dirs {
-                if dir.is_archived() {
-                    if self.args.verbose {
-                        println!("  Unarchiving directory {}", &dir);
-                    }
-                    if !self.args.dry_run {
-                        self.unarchive_dir(&db, &fs, &mut dir)?;
-                    }
-                }
-            }
+        match self.args.config.incremental {
+            true => self.delete_history_incremental(&db, &fs)?,
+            false => self.delete_history_non_incremental(&db, &fs)?,
         }
         self.clean_up(&db, &fs)?;
         if !self.args.quiet {
@@ -169,6 +126,69 @@ impl DeleteCommand {
                 }
                 dir.delete_ref(db)?;
                 dir.delete(db)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn delete_history_incremental(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+        for sid in &self.args.sids {
+            if !self.args.quiet {
+                println!("Deleting snapshot {} files", *sid);
+            }
+            if !self.args.dry_run {
+                if !self.args.pattern.is_empty() {
+                    File::delete_files(db, *sid, &self.args.pattern)?;
+                } else {
+                    File::delete_all_by_sid(db, *sid)?;
+                    Snapshot::delete_by_id(db, *sid)?;
+                }
+            }
+        }
+        let files = File::orphans(db)?;
+        for file in files {
+            if self.args.verbose {
+                println!("  Removing file {}", file);
+            }
+            if !self.args.dry_run {
+                file.delete(db)?;
+                fs.remove_file(&file)?;
+            }
+        }
+        if let Some(snapshot) = Snapshot::get_latest(db)? {
+            let files = File::files(db, &snapshot)?;
+            for mut file in files {
+                if file.is_archived() {
+                    if self.args.verbose {
+                        println!("  Unarchiving file {}", &file);
+                    }
+                    if !self.args.dry_run {
+                        self.unarchive_file(db, fs, &snapshot, &mut file)?;
+                    }
+                }
+            }
+            let dirs = File::dirs(db, &snapshot)?;
+            for mut dir in dirs {
+                if dir.is_archived() {
+                    if self.args.verbose {
+                        println!("  Unarchiving directory {}", &dir);
+                    }
+                    if !self.args.dry_run {
+                        self.unarchive_dir(db, fs, &mut dir)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn delete_history_non_incremental(&self, db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+        for sid in &self.args.sids {
+            if !self.args.quiet {
+                println!("Deleting snapshot {} files", *sid);
+            }
+            if !self.args.dry_run {
+                File::delete_sync_mode(db, *sid)?;
             }
         }
         Ok(())
