@@ -31,6 +31,8 @@ const INSERT_HISTORY_SYNC_MODE: &str = "INSERT INTO filehistory SELECT id, ?1, d
 
 const ARCHIVE: &str = "UPDATE fileversions SET archive=?2, deleted_sid=?3 WHERE id=?1";
 
+const UPDATE: &str = "UPDATE fileversions SET digest=?1, size=?2, modified=?3 WHERE id=?4";
+
 const UPDATE_REF: &str = "UPDATE snapshotfiles SET version_id=?1 WHERE version_id=?2";
 
 const DELETE: &str = "DELETE FROM fileversions WHERE id=?1";
@@ -364,6 +366,10 @@ impl File {
 
     pub fn unarchive(&mut self, db: &Database) -> Result<(), CmdError> {
         db.execute(ARCHIVE, params![self.id, String::new(), self.deleted_sid])
+    }
+
+    pub fn update(&self, db: &Database) -> Result<(), CmdError> {
+        db.execute(UPDATE, params![self.digest, self.size, self.modified, self.id])
     }
 
     pub fn update_ref(&self, db: &Database, file: &File) -> Result<(), CmdError> {
