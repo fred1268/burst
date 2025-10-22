@@ -58,34 +58,27 @@ impl ConfigArgs {
                 "--quiet" | "-q" => params.quiet = true,
                 "--verbose" | "-v" => params.verbose = true,
                 "--dry-run" | "-n" => params.dry_run = true,
-                _ => {
-                    if args[n].starts_with("--") {
-                        return Err(Error::InvalidParameter(args[n].clone()));
-                    } else {
-                        params.subcommand.push_str(&args[n]);
-                        match args[n].as_str() {
-                            "get" | "convert" => {
-                                if n < args.len() - 2 && !args[n + 1].starts_with("--") {
-                                    params.key.push_str(&args[n + 1]);
-                                    n += 1;
-                                }
-                            }
-                            "set" | "add" | "remove" => {
-                                if n < args.len() - 2 && !args[n + 1].starts_with("--") {
-                                    params.key.push_str(&args[n + 1]);
-                                    n += 1;
-                                }
-                                if n < args.len() - 2 && !args[n + 1].starts_with("--") {
-                                    params.value.push_str(&args[n + 1]);
-                                    n += 1;
-                                }
-                            }
-                            "show" => (),
-                            _ => {
-                                return Err(Error::InvalidParameter(args[n].clone()));
-                            }
-                        }
+                "get" | "convert" => {
+                    params.subcommand.push_str(&args[n]);
+                    if n < args.len() - 2 && !args[n + 1].starts_with("--") {
+                        params.key.push_str(&args[n + 1]);
+                        n += 1;
                     }
+                }
+                "set" | "add" | "remove" => {
+                    params.subcommand.push_str(&args[n]);
+                    if n < args.len() - 2 && !args[n + 1].starts_with("--") {
+                        params.key.push_str(&args[n + 1]);
+                        n += 1;
+                    }
+                    if n < args.len() - 2 && !args[n + 1].starts_with("--") {
+                        params.value.push_str(&args[n + 1]);
+                        n += 1;
+                    }
+                }
+                "show" => params.subcommand.push_str(&args[n]),
+                _ => {
+                    return Err(Error::InvalidParameter(args[n].clone()));
                 }
             }
             n += 1
