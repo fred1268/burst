@@ -60,15 +60,16 @@ impl Command for BackupCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} backup [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Backup files to specified directory using this directory's configuration.");
-        println!();
-        println!("Options:");
-        println!("\t-c, --continue\t\t\t\tcontinue an interrupted backup process");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
+        println!(
+            "Usage: {} backup [OPTIONS] <BACKUP_PATH>\n\n\
+        Backup files to specified directory using this directory's configuration.\n\n\
+        Options:\n\
+        \t-c, --continue\t\t\t\tcontinue an interrupted backup process\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\
+        \t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {

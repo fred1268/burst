@@ -35,16 +35,18 @@ impl Command for HelpCommand {
 
     fn help(&self) {
         HelpCommand::help(&self.args.exe);
-        println!("Commands:");
-        println!("\thelp\t\tGet this list of commands or help about a specific command");
-        println!("\tinit\t\tInitialize a new directory as backup target");
-        println!("\tbackup\t\tBackup files to specified directory using this directory's configuration.");
-        println!("\tlist\t\tShows files in a snapshot or the specified files history");
-        println!("\thistory\t\tShows backup snapshot timeline with statistics");
-        println!("\tdelete\t\tRemoves backup history selectively to manage storage space and retention policies");
-        println!("\trestore\t\tRestores files from backup snapshot to specified location");
-        println!("\tconfig\t\tManages backup repository configuration and performs configuration-related operations");
-        println!("\tverify\t\tVerifies backup integrity and files consistency");
+        println!(
+            "Commands:\n\
+        \thelp\t\tGet this list of commands or help about a specific command\n\
+        \tinit\t\tInitialize a new directory as backup target\n\
+        \tbackup\t\tBackup files to specified directory using this directory's configuration.\n\
+        \tlist\t\tShows files in a snapshot or the specified files history\n\
+        \thistory\t\tShows backup snapshot timeline with statistics\n\
+        \tdelete\t\tRemoves backup history selectively to manage storage space and retention policies\n\
+        \trestore\t\tRestores files from backup snapshot to specified location\n\
+        \tconfig\t\tManages backup repository configuration and performs configuration-related operations\n\
+        \tverify\t\tVerifies backup integrity and files consistency"
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
@@ -92,10 +94,11 @@ impl Command for HelpCommand {
 
 impl HelpCommand {
     pub fn help(exe: &str) {
-        println!("Usage: {} <COMMAND> [OPTIONS]", exe);
-        println!();
-        println!("Burst - An opinionated, cross‑platform backup CLI written in Rust.");
-        println!();
+        println!(
+            "Usage: {} <COMMAND> [OPTIONS]\n\n\
+        Burst - An opinionated, cross‑platform backup CLI written in Rust.\n",
+            exe
+        );
     }
 
     pub fn default_help(exe: &String) {

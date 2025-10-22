@@ -72,29 +72,27 @@ impl Command for ConfigCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} config <SUBCOMMAND> [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Manages backup repository configuration and performs configuration-related operations.");
-        println!("Includes both safe configuration changes and destructive repository modifications.");
-        println!();
-        println!("Subcommands:");
-        println!("\tshow\t\t\t\t\tdisplay current configuration");
-        println!("\tget <KEY>\t\t\t\tget specific configuration value");
-        println!("\tset <KEY> <VALUE>\t\t\tset configuration value (source|hash_comparison|follow_symlinks)");
-        println!("\tadd <KEY> <PATTERN>\t\t\tadd value to multi-value keys (exclude|no_history)");
-        println!("\tremove <KEY> <PATTERN>\t\t\tRemove specific value OR entire key (exclude|no_history)");
-        println!("\tconvert <MODE>\t\t\t\tconvert repository mode (sync|incremental)");
-        // println!("\tvalidate\t\t\t\tcheck configuration file validity");
-        println!();
-        println!("Options:");
-        println!("\t    --fix-history\t\t\tremove previously backed up versions (destructive)");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
-        println!();
-        println!("Examples of patterns (regex):");
-        println!("\t*.tmp:\t\t\t\t\t add exclude \".*\\.tmp\"");
-        println!("\tmacOS trash:\t\t\t\tadd exclude: \".*/\\.DS_Store$\"");
+        println!(
+            "Usage: {} config <SUBCOMMAND> [OPTIONS] <BACKUP_PATH>\n\n\
+        Manages backup repository configuration and performs configuration-related operations.\n\
+        Includes both safe configuration changes and destructive repository modifications.\n\n\
+        Subcommands:\n\
+        \tshow\t\t\t\t\tdisplay current configuration\n\
+        \tget <KEY>\t\t\t\tget specific configuration value\n\
+        \tset <KEY> <VALUE>\t\t\tset configuration value (source|hash_comparison|follow_symlinks)\n\
+        \tadd <KEY> <PATTERN>\t\t\tadd value to multi-value keys (exclude|no_history)\n\
+        \tremove <KEY> <PATTERN>\t\t\tRemove specific value OR entire key (exclude|no_history)\n\
+        \tconvert <MODE>\t\t\t\tconvert repository mode (sync|incremental)\n\n\
+        Options:\n\
+        \t    --fix-history\t\t\tremove previously backed up versions (destructive)\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\
+        \t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead\n\n\
+        Examples of patterns (regex):\n\
+        \t*.tmp:\t\t\t\t\tadd exclude \".*\\.tmp\"\n\
+        \tmacOS trash:\t\t\t\tadd exclude: \".*/\\.DS_Store$\"",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {

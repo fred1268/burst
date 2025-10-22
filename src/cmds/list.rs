@@ -39,17 +39,18 @@ impl Command for ListCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} list [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Shows files in a snapshot or the specified files history.");
-        println!();
-        println!("Options:");
-        println!("\t-s, --snapshot <ID>\t\t\tList the content of a specific snapshot");
-        println!("\t-i, --diff-with\t\t\t\tShow differences with the specified snapshot");
-        println!("\t-p, --pattern <PATTERN>\t\t\tShow all historical versions for specified files");
-        println!("\t-d, --deleted\t\t\t\tShow only deleted files in the specified snapshot");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
+        println!(
+            "Usage: {} list [OPTIONS] <BACKUP_PATH>\n\n\
+        Shows files in a snapshot or the specified files history.\n\n\
+        Options:\n\
+        \t-s, --snapshot <ID>\t\t\tList the content of a specific snapshot\n\
+        \t-i, --diff-with\t\t\t\tShow differences with the specified snapshot\n\
+        \t-p, --pattern <PATTERN>\t\t\tShow all historical versions for specified files\n\
+        \t-d, --deleted\t\t\t\tShow only deleted files in the specified snapshot\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {

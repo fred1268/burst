@@ -41,18 +41,18 @@ impl Command for VerifyCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} verify <WHAT> [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Verifies backup integrity and files consistency.");
-        println!();
-        println!("What:");
-        println!("\tintegrity\t\t\t\tcheck backup file system integrity");
-        println!("\thash\t\t\t\t\tcheck file integrity by comparing hash");
-        println!();
-        println!("Options:");
-        println!("\t    --fix\t\t\t\ttry to fix issues if any");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
+        println!(
+            "Usage: {} verify <WHAT> [OPTIONS] <BACKUP_PATH>\n\n\
+        Verifies backup integrity and files consistency.\n\n\
+        What:\n\
+        \tintegrity\t\t\t\tcheck backup file system integrity\n\
+        \thash\t\t\t\t\tcheck file integrity by comparing hash\n\n\
+        Options:\n\
+        \t    --fix\t\t\t\ttry to fix issues if any\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {

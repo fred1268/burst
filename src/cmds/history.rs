@@ -29,14 +29,15 @@ impl Command for HistoryCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} history [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Shows backup snapshot timeline with statistics.");
-        println!();
-        println!("Options:");
-        println!("\t-n, --limit\t\t\t\tLimit number of backups shown");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
+        println!(
+            "Usage: {} history [OPTIONS] <BACKUP_PATH>\n\n\
+        Shows backup snapshot timeline with statistics.\n\n\
+        Options:\n\
+        \t-n, --limit\t\t\t\tLimit number of backups shown\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {

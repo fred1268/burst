@@ -42,22 +42,22 @@ impl Command for RestoreCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} restore [OPTIONS] <BACKUP_PATH> <RESTORE_PATH>", self.args.exe);
-        println!();
-        println!("Restores files from backup snapshot to specified location.");
-        println!();
-        println!("Options:");
-        println!("\t-s, --snapshot <ID>\t\t\trestore from specific snapshot");
-        println!("\t-p, --pattern <PATTERN>\t\t\tfiles or directories to restore");
-        println!("\t-w, --overwrite\t\t\t\toverwrite existing files");
-        println!("\t-t, --flatten\t\t\t\tignore original directory paths");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
-        println!();
-        println!("Examples of patterns (regex):");
-        println!("\t*.png:\t\t\t\t\t--pattern \".*\\.png\"");
-        println!("\tPDFs inside any manuals folders:\t--pattern: \"/?manuals(/.*)?/.*\\.pdf$\"");
+        println!(
+            "Usage: {} restore [OPTIONS] <BACKUP_PATH> <RESTORE_PATH>\n\n\
+        Restores files from backup snapshot to specified location.\n\n\
+        Options:\n\
+        \t-s, --snapshot <ID>\t\t\trestore from specific snapshot\n\
+        \t-p, --pattern <PATTERN>\t\t\tfiles or directories to restore\n\
+        \t-w, --overwrite\t\t\t\toverwrite existing files\n\
+        \t-t, --flatten\t\t\t\tignore original directory paths\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\
+        \t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead\n\n\
+        Examples of patterns (regex):\n\
+        \t*.png:\t\t\t\t\t--pattern \".*\\.png\"\n\
+        \tPDFs inside any manuals folders:\t--pattern: \"/?manuals(/.*)?/.*\\.pdf$\"",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {

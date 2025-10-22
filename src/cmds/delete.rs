@@ -39,24 +39,23 @@ impl Command for DeleteCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} delete <SELECTOR> [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Removes backup history selectively to manage storage space and retention policies.");
-        println!();
-        println!("Selector:");
-        println!("\t-s, --snapshot <SPEC>\t\t\tdelete snapshots (single: 5, list: 1,3,7, range: 1-5)");
-        println!("\t-o, --older-than <DATE>\t\t\tdelete history older than specified date (yyyy-mm-dd)");
-        println!("\t-l, --keep-last <COUNT>\t\t\tkeep only the last N versions of each file");
-        println!();
-        println!("Options:");
-        println!("\t-p, --pattern <PATTERN>\t\t\tfiles or directories to delete (relative to backup root)");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
-        println!();
-        println!("Examples of patterns (regex):");
-        println!("\t*.png:\t\t\t\t\t--pattern \".*\\.png$\"");
-        println!("\toffice folder and its content:\t\t--pattern: \"/?office(/.*)?$\"");
+        println!(
+            "Usage: {} delete <SELECTOR> [OPTIONS] <BACKUP_PATH>\n\n\
+        Removes backup history selectively to manage storage space and retention policies.\n\n\
+        Selector:\n\
+        \t-s, --snapshot <SPEC>\t\t\tdelete snapshots (single: 5, list: 1,3,7, range: 1-5)\n\
+        \t-o, --older-than <DATE>\t\t\tdelete history older than specified date (yyyy-mm-dd)\n\
+        \t-l, --keep-last <COUNT>\t\t\tkeep only the last N versions of each file\n\n\
+        Options:\n\
+        \t-p, --pattern <PATTERN>\t\t\tfiles or directories to delete (relative to backup root)\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\
+        \t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead\n\n\
+        Examples of patterns (regex):\n\
+        \t*.png:\t\t\t\t\t--pattern \".*\\.png$\"\n\
+        \toffice folder and its content:\t\t--pattern: \"/?office(/.*)?$\"",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {

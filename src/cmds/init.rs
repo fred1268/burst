@@ -38,26 +38,26 @@ impl Command for InitCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} init [OPTIONS] <SOURCE> <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Initialize a new directory as backup target.");
-        println!();
-        println!("Options:");
-        println!("\t-c, --config\t\t\t\tyaml configuration file to use");
-        println!("\t-e, --exclude <PATTERN>\t\t\tlist of patterns to exclude from the backup");
-        println!("\t-t, --no-history <PATTERN>\t\tlist of patterns for which history won't be kept");
-        println!("\t-i, --incremental\t\t\tincremental mode, keep versions (default)");
-        println!("\t    --no-incremental\t\t\tnon incremental mode (keep a single version of each file)");
-        println!("\t-a, --hash-comparison\t\t\tcompare hash after copy (default, slower)");
-        println!("\t    --no-hash-comparison\t\tdo not compare hash after copy (faster)");
-        println!("\t-s, --follow-symlinks\t\t\tfollow symlinks in source directory");
-        println!("\t    --no-follow-symlinks\t\tdo not follow symlinks (default)");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!();
-        println!("Examples of patterns (regex):");
-        println!("\t*.tmp:\t\t\t\t\t--exclude \".*\\.tmp\"");
-        println!("\tmacOS trash:\t\t\t\t--exclude: \".*/\\.DS_Store$\"");
+        println!(
+            "Usage: {} init [OPTIONS] <SOURCE> <BACKUP_PATH>\n\n\
+        Initialize a new directory as backup target.\n\n\
+        Options:\n\
+        \t-c, --config\t\t\t\tyaml configuration file to use\n\
+        \t-e, --exclude <PATTERN>\t\t\tlist of patterns to exclude from the backup\n\
+        \t-t, --no-history <PATTERN>\t\tlist of patterns for which history won't be kept\n\
+        \t-i, --incremental\t\t\tincremental mode, keep versions (default)\n\
+        \t    --no-incremental\t\t\tnon incremental mode (keep a single version of each file)\n\
+        \t-a, --hash-comparison\t\t\tcompare hash after copy (default, slower)\n\
+        \t    --no-hash-comparison\t\tdo not compare hash after copy (faster)\n\
+        \t-s, --follow-symlinks\t\t\tfollow symlinks in source directory\n\
+        \t    --no-follow-symlinks\t\tdo not follow symlinks (default)\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\n\
+        Examples of patterns (regex):\n\
+        \t*.tmp:\t\t\t\t\t--exclude \".*\\.tmp\"\n\
+        \tmacOS trash:\t\t\t\t--exclude: \".*/\\.DS_Store$\"",
+            self.args.exe
+        );
     }
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
