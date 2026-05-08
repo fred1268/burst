@@ -5,7 +5,7 @@ use crate::tools::db::Database;
 use crate::tools::fmt::human_readable_size;
 use chrono::{DateTime, Local};
 use rusqlite::{Params, params};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::Metadata;
 #[cfg(target_family = "unix")]
@@ -50,7 +50,7 @@ enum What {
     Files,
 }
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(Debug)]
 pub struct File {
     pub id: u64,
     pub sid: u64,
@@ -80,6 +80,20 @@ impl fmt::Display for File {
             self.fullname(),
             human_readable_size(self.size),
         )
+    }
+}
+
+impl PartialEq for File {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for File {}
+
+impl std::hash::Hash for File {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
     }
 }
 
@@ -264,6 +278,13 @@ impl File {
         sql.push_str(" WHERE sf.snapshot_id=?1 AND fv.path=?2");
         Self::entry_type(&mut sql, what);
         File::list_by_path(db, &sql, params![snapshot.id, path.to_str().unwrap()])
+    }
+
+    pub fn all_entries(db: &Database, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+        let mut sql = String::from(READ);
+        sql.push_str(" WHERE sf.snapshot_id=?1");
+        sql.push_str(" ORDER BY fv.path ASC, fv.is_dir DESC, fv.name ASC");
+        File::list(db, &sql, params![snapshot.id])
     }
 
     pub fn dirs(db: &Database, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
@@ -460,5 +481,42 @@ impl File {
                 is_dir: row.get(10)?,
             })
         })
+    }
+}
+
+#[derive(Debug)]
+pub struct Directory {
+    pub name: PathBuf,
+    pub files: HashSet<File>,
+    pub children: HashSet<Directory>,
+}
+
+impl fmt::Display for Directory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.name)
+    }
+}
+
+impl PartialEq for Directory {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Directory {}
+
+impl std::hash::Hash for Directory {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+impl Directory {
+    pub fn new(path: &Path) -> Self {
+        Directory { name: PathBuf::from(path), files: HashSet::new(), children: HashSet::new() }
+    }
+
+    pub fn from_parts(name: PathBuf, files: HashSet<File>, children: HashSet<Directory>) -> Self {
+        Directory { name, files, children }
     }
 }

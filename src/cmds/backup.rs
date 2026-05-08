@@ -1,14 +1,27 @@
 use crate::args::backup::BackupArgs;
 use crate::cmds::command::{self, Command};
-use crate::cmds::file::File;
+use crate::cmds::file::{Directory, File};
 use crate::cmds::snapshot::Snapshot;
 use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
 use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
 use crate::tools::fs::FileSystem;
+use std::boxed::Box;
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Instant;
+use tokio::task::JoinSet;
+
+struct ScanStats {
+    pub excluded_dirs: u64,
+    pub excluded_files: u64,
+}
+
+type ReadDirectoryResult = Result<(Directory, ScanStats), CmdError>;
 
 pub struct BackupCommand {
     args: BackupArgs,
@@ -89,6 +102,17 @@ impl Command for BackupCommand {
         } else if let Some(ps) = Snapshot::get_previous(&db, snapshot.id)? {
             self.previous_snapshot = ps;
         }
+
+        // let rt = tokio::runtime::Runtime::new().map_err(|e| CmdError::GenericError(e.to_string()))?;
+        // let (dir, stats) =
+        //     rt.block_on(Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()))?;
+        // snapshot.excluded_dirs = stats.excluded_dirs;
+        // snapshot.excluded_files = stats.excluded_files;
+        // Self::display_directory(dir, 0);
+        // println!();
+        // let prev_dir = self.read_previous_source(&db)?;
+        // Self::display_directory(prev_dir, 0);
+
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
         if !self.process_directory(&db, &fs, &mut snapshot, &self.args.config.source)? && !self.args.quiet {
             println!("Warning: backup is empty");
@@ -348,5 +372,109 @@ impl BackupCommand {
         dir.delete_ref(db)?;
         dir.delete(db)?;
         fs.remove_dir(dir)
+    }
+
+    fn read_source(args: Arc<BackupArgs>, pid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
+        Box::pin(async move {
+            let mut scan_stats = ScanStats { excluded_dirs: 0, excluded_files: 0 };
+            if !args.quiet && pid == 0 {
+                println!("Directory {:?}", root);
+            }
+            let mut subdirs: Vec<PathBuf> = vec![];
+            let mut files = HashSet::new();
+            let mut entries = tokio::fs::read_dir(root.clone())
+                .await
+                .map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
+            while let Some(entry) = entries.next_entry().await.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))? {
+                let p = entry.path();
+                let metadata = tokio::fs::symlink_metadata(&p).await.map_err(|err| CmdError::IoError(IoError::from(&p, err)))?;
+                if !args.config.follow_symlinks && metadata.is_symlink() {
+                    if args.verbose {
+                        println!("  Excluded symlink {:?}", entry.file_name())
+                    }
+                    continue;
+                }
+                if args.config.is_excluded(&p) {
+                    if metadata.is_dir() {
+                        scan_stats.excluded_dirs += 1;
+                        if args.verbose {
+                            println!("Excluded directory {:?}", p)
+                        }
+                    } else {
+                        scan_stats.excluded_files += 1;
+                        if args.verbose {
+                            println!("  Excluded file {:?}", p.file_name().unwrap())
+                        }
+                    }
+                    continue;
+                }
+                if p.is_dir() {
+                    subdirs.push(p);
+                    continue;
+                }
+                files.insert(File::from_metadata(
+                    p.strip_prefix(&args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
+                    metadata,
+                ));
+            }
+            let mut set = JoinSet::new();
+            for subdir in subdirs {
+                set.spawn(Self::read_source(Arc::clone(&args), pid, subdir));
+            }
+            let mut children = HashSet::new();
+            while let Some(dir) = set.join_next().await {
+                let (dir, stats) = dir.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                scan_stats.excluded_dirs += stats.excluded_dirs;
+                scan_stats.excluded_files += stats.excluded_files;
+                children.insert(dir);
+            }
+            Ok((
+                Directory::from_parts(
+                    PathBuf::from(
+                        root.strip_prefix(&args.config.source)
+                            .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
+                    ),
+                    files,
+                    children,
+                ),
+                scan_stats,
+            ))
+        })
+    }
+
+    fn display_directory(dir: Directory, level: u8) {
+        let mut indent = String::new();
+        (0..=level).for_each(|_| indent.push_str("  "));
+        println!("{}{:?}", indent, dir.name);
+        for dir in dir.children {
+            Self::display_directory(dir, level + 1);
+        }
+        indent.push_str("  ");
+        for file in dir.files {
+            println!("{}{:?}", indent, file.name);
+        }
+    }
+
+    fn build_directory(by_path: &mut HashMap<PathBuf, Vec<File>>, path: PathBuf) -> Directory {
+        let entries = by_path.remove(&path).unwrap_or_default();
+        let mut files = HashSet::new();
+        let mut children = HashSet::new();
+        for entry in entries {
+            if entry.is_dir {
+                children.insert(Self::build_directory(by_path, entry.fullname()));
+            } else {
+                files.insert(entry);
+            }
+        }
+        Directory { name: path, files, children }
+    }
+
+    fn read_previous_source(&self, db: &Database) -> Result<Directory, CmdError> {
+        let entries = File::all_entries(db, &self.previous_snapshot)?;
+        let mut by_path: HashMap<PathBuf, Vec<File>> = HashMap::new();
+        for entry in entries {
+            by_path.entry(entry.path.clone()).or_default().push(entry);
+        }
+        Ok(Self::build_directory(&mut by_path, PathBuf::new()))
     }
 }

@@ -6,7 +6,7 @@ use std::string::String;
 
 const MIN_PARAMS: usize = 3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct BackupArgs {
     pub config: BackupConfig,
     pub exe: String,

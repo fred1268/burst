@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::string::String;
 use yaml_rust2::{Yaml, YamlLoader};
 
+#[derive(Debug, Clone)]
 pub struct BackupConfig {
     pub source: PathBuf,
     pub target: PathBuf,
