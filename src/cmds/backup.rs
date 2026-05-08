@@ -16,12 +16,56 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
 
-struct ScanStats {
-    pub excluded_dirs: u64,
-    pub excluded_files: u64,
+struct Excluded {
+    pub dirs: u64,
+    pub files: u64,
 }
 
-type ReadDirectoryResult = Result<(Directory, ScanStats), CmdError>;
+type ReadDirectoryResult = Result<(Directory, Excluded), CmdError>;
+
+#[derive(Default)]
+struct Todo {
+    pub dir_added: Vec<Directory>,
+    pub dir_deleted: Vec<Directory>,
+    pub file_added: Vec<File>,
+    pub file_deleted: Vec<File>,
+    pub file_modified: Vec<(File, File)>,
+}
+
+impl Todo {
+    pub fn display(&self) {
+        if !self.dir_added.is_empty() {
+            println!("Added directories:");
+            for dir in &self.dir_added {
+                println!("  {:?}", dir.name);
+            }
+        }
+        if !self.dir_deleted.is_empty() {
+            println!("Deleted directories:");
+            for dir in &self.dir_deleted {
+                println!("  {:?}", dir.name);
+            }
+        }
+        if !self.file_added.is_empty() {
+            println!("Added files:");
+            for file in &self.file_added {
+                println!("  {:?}", file.fullname());
+            }
+        }
+        if !self.file_deleted.is_empty() {
+            println!("Deleted files:");
+            for file in &self.file_deleted {
+                println!("  {:?}", file.fullname());
+            }
+        }
+        if !self.file_modified.is_empty() {
+            println!("Modified files:");
+            for (prev, new) in &self.file_modified {
+                println!("  {:?} -> {:?}", prev.fullname(), new.fullname());
+            }
+        }
+    }
+}
 
 pub struct BackupCommand {
     args: BackupArgs,
@@ -106,12 +150,16 @@ impl Command for BackupCommand {
         // let rt = tokio::runtime::Runtime::new().map_err(|e| CmdError::GenericError(e.to_string()))?;
         // let (dir, stats) =
         //     rt.block_on(Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()))?;
-        // snapshot.excluded_dirs = stats.excluded_dirs;
-        // snapshot.excluded_files = stats.excluded_files;
-        // Self::display_directory(dir, 0);
+        // snapshot.excluded_dirs = stats.dirs;
+        // snapshot.excluded_files = stats.files;
+        // println!("source");
+        // dir.display(0);
         // println!();
         // let prev_dir = self.read_previous_source(&db)?;
-        // Self::display_directory(prev_dir, 0);
+        // println!("previous");
+        // prev_dir.display(0);
+        // let todo = self.compare_tree(dir, prev_dir);
+        // todo.display();
 
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
         if !self.process_directory(&db, &fs, &mut snapshot, &self.args.config.source)? && !self.args.quiet {
@@ -376,7 +424,7 @@ impl BackupCommand {
 
     fn read_source(args: Arc<BackupArgs>, pid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
         Box::pin(async move {
-            let mut scan_stats = ScanStats { excluded_dirs: 0, excluded_files: 0 };
+            let mut excluded = Excluded { dirs: 0, files: 0 };
             if !args.quiet && pid == 0 {
                 println!("Directory {:?}", root);
             }
@@ -396,12 +444,12 @@ impl BackupCommand {
                 }
                 if args.config.is_excluded(&p) {
                     if metadata.is_dir() {
-                        scan_stats.excluded_dirs += 1;
+                        excluded.dirs += 1;
                         if args.verbose {
                             println!("Excluded directory {:?}", p)
                         }
                     } else {
-                        scan_stats.excluded_files += 1;
+                        excluded.files += 1;
                         if args.verbose {
                             println!("  Excluded file {:?}", p.file_name().unwrap())
                         }
@@ -423,9 +471,9 @@ impl BackupCommand {
             }
             let mut children = HashSet::new();
             while let Some(dir) = set.join_next().await {
-                let (dir, stats) = dir.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
-                scan_stats.excluded_dirs += stats.excluded_dirs;
-                scan_stats.excluded_files += stats.excluded_files;
+                let (dir, excl) = dir.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                excluded.dirs += excl.dirs;
+                excluded.files += excl.files;
                 children.insert(dir);
             }
             Ok((
@@ -437,31 +485,18 @@ impl BackupCommand {
                     files,
                     children,
                 ),
-                scan_stats,
+                excluded,
             ))
         })
     }
 
-    fn display_directory(dir: Directory, level: u8) {
-        let mut indent = String::new();
-        (0..=level).for_each(|_| indent.push_str("  "));
-        println!("{}{:?}", indent, dir.name);
-        for dir in dir.children {
-            Self::display_directory(dir, level + 1);
-        }
-        indent.push_str("  ");
-        for file in dir.files {
-            println!("{}{:?}", indent, file.name);
-        }
-    }
-
-    fn build_directory(by_path: &mut HashMap<PathBuf, Vec<File>>, path: PathBuf) -> Directory {
+    fn build_directory(&self, by_path: &mut HashMap<PathBuf, Vec<File>>, path: PathBuf) -> Directory {
         let entries = by_path.remove(&path).unwrap_or_default();
         let mut files = HashSet::new();
         let mut children = HashSet::new();
         for entry in entries {
             if entry.is_dir {
-                children.insert(Self::build_directory(by_path, entry.fullname()));
+                children.insert(self.build_directory(by_path, entry.fullname()));
             } else {
                 files.insert(entry);
             }
@@ -475,6 +510,33 @@ impl BackupCommand {
         for entry in entries {
             by_path.entry(entry.path.clone()).or_default().push(entry);
         }
-        Ok(Self::build_directory(&mut by_path, PathBuf::new()))
+        Ok(self.build_directory(&mut by_path, PathBuf::new()))
+    }
+
+    fn compare_tree(&self, src: Directory, prev: Directory) -> Todo {
+        let mut todo = Todo::default();
+        self.recurse_compare_tree(src, prev, &mut todo);
+        todo
+    }
+
+    fn recurse_compare_tree(&self, src: Directory, mut prev: Directory, todo: &mut Todo) {
+        for file in src.files {
+            if let Some(prev_file) = prev.files.take(&file) {
+                if prev_file != file {
+                    todo.file_modified.push((file, prev_file));
+                }
+                continue;
+            }
+            todo.file_added.push(file);
+        }
+        todo.file_deleted.extend(prev.files.drain());
+        for child in src.children {
+            if let Some(prev_child) = prev.children.take(&child) {
+                self.recurse_compare_tree(child, prev_child, todo);
+                continue;
+            }
+            todo.dir_added.push(child);
+        }
+        todo.dir_deleted.extend(prev.children.drain());
     }
 }

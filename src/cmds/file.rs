@@ -85,7 +85,7 @@ impl fmt::Display for File {
 
 impl PartialEq for File {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.path == other.path && self.name == other.name
     }
 }
 
@@ -93,6 +93,7 @@ impl Eq for File {}
 
 impl std::hash::Hash for File {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
         self.name.hash(state);
     }
 }
@@ -518,5 +519,18 @@ impl Directory {
 
     pub fn from_parts(name: PathBuf, files: HashSet<File>, children: HashSet<Directory>) -> Self {
         Directory { name, files, children }
+    }
+
+    pub fn display(&self, level: u8) {
+        let mut indent = String::new();
+        (0..=level).for_each(|_| indent.push_str("  "));
+        println!("{}{:?}", indent, self.name);
+        for child in &self.children {
+            child.display(level + 1);
+        }
+        indent.push_str("  ");
+        for file in &self.files {
+            println!("{}{:?}", indent, file.name);
+        }
     }
 }
