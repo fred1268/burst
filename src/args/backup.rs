@@ -14,6 +14,7 @@ pub struct BackupArgs {
     pub verbose: bool,
     pub dry_run: bool,
     pub cont: bool,
+    pub parallel: bool,
 }
 
 impl fmt::Display for BackupArgs {
@@ -49,6 +50,7 @@ impl BackupArgs {
                 "--quiet" | "-q" => params.quiet = true,
                 "--verbose" | "-v" => params.verbose = true,
                 "--dry-run" | "-n" => params.dry_run = true,
+                "--parallel" | "-p" => params.parallel = true,
                 _ => {
                     if args[n].starts_with("--") {
                         return Err(CmdError::InvalidParameter(args[n].clone()));

@@ -149,26 +149,10 @@ impl Command for BackupCommand {
             self.previous_snapshot = ps;
         }
 
-        // let rt = tokio::runtime::Runtime::new().map_err(|e| CmdError::GenericError(e.to_string()))?;
-        // let (dir, statistics) =
-        //     rt.block_on(Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()))?;
-        // if !statistics.has_files && !self.args.quiet {
-        //     println!("Warning: backup is empty");
-        // }
-        // snapshot.excluded_dirs = statistics.dirs;
-        // snapshot.excluded_files = statistics.files;
-        // println!("source");
-        // dir.display(0);
-        // println!();
-        // let prev_dir = self.read_previous_source(&db)?;
-        // println!("previous");
-        // prev_dir.display(0);
-        // let todo = self.compare_tree(dir, prev_dir);
-        // println!("diff");
-        // todo.display();
-        let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
-        if !self.process_directory(&db, &fs, &mut snapshot, &self.args.config.source)? && !self.args.quiet {
-            println!("Warning: backup is empty");
+        if self.args.parallel {
+            self.async_do_backup(&db, &mut snapshot)?;
+        } else {
+            self.sync_do_backup(&db, &mut snapshot)?;
         }
 
         if !self.args.dry_run && !self.args.config.incremental {
@@ -193,6 +177,14 @@ impl Command for BackupCommand {
 }
 
 impl BackupCommand {
+    fn sync_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
+        let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
+        if !self.process_directory(db, &fs, snapshot, &self.args.config.source)? && !self.args.quiet {
+            println!("Warning: backup is empty");
+        }
+        Ok(())
+    }
+
     fn process_directory(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, root: &Path) -> Result<bool, CmdError> {
         snapshot.dirs += 1;
         if !self.args.quiet && self.previous_snapshot.id == 0 {
@@ -450,6 +442,26 @@ impl BackupCommand {
         fs.remove_dir(dir)
     }
 
+    fn async_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
+        let rt = tokio::runtime::Runtime::new().map_err(|e| CmdError::GenericError(e.to_string()))?;
+        let (dir, statistics) =
+            rt.block_on(Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()))?;
+        if !statistics.has_files && !self.args.quiet {
+            println!("Warning: backup is empty");
+        }
+        snapshot.excluded_dirs = statistics.dirs;
+        snapshot.excluded_files = statistics.files;
+        println!("source");
+        dir.display(0);
+        println!();
+        let prev_dir = self.read_previous_source(db)?;
+        println!("previous");
+        prev_dir.display(0);
+        let todo = self.compare_tree(dir, prev_dir);
+        println!("diff");
+        todo.display();
+        Ok(())
+    }
     fn read_source(args: Arc<BackupArgs>, pid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
         Box::pin(async move {
             let mut statistics = Statistics::default();
