@@ -87,10 +87,10 @@ impl ListCommand {
         let files = match self.args.deleted {
             true => {
                 if let Some(previous_snapshot) = Snapshot::get_previous(db, snapshot.id)? {
-                    File::deleted_files(db, &previous_snapshot, snapshot)?
+                    File::deleted_files(db, previous_snapshot.id, snapshot.id)?
                 } else if !self.args.config.incremental {
                     if let Some(previous_snapshot) = Snapshot::get_previous_sync_mode(db, snapshot.id)? {
-                        File::deleted_files_sync_mode(db, &previous_snapshot, snapshot)?
+                        File::deleted_files_sync_mode(db, previous_snapshot.id, snapshot.id)?
                     } else {
                         vec![]
                     }
@@ -99,12 +99,12 @@ impl ListCommand {
                 }
             }
             false => match self.args.diff_sid {
-                0 => File::files(db, snapshot)?,
+                0 => File::files(db, snapshot.id)?,
                 _ => {
                     if let Some(diff_snapshot) = Snapshot::get(db, self.args.diff_sid)? {
                         match self.args.config.incremental {
-                            true => File::diff(db, snapshot, &diff_snapshot)?,
-                            false => File::diff_sync_mode(db, snapshot, &diff_snapshot)?,
+                            true => File::diff(db, diff_snapshot.id, snapshot.id)?,
+                            false => File::diff_sync_mode(db, diff_snapshot.id, snapshot.id)?,
                         }
                     } else {
                         vec![]

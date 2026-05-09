@@ -156,7 +156,7 @@ impl Command for BackupCommand {
         }
 
         if !self.args.dry_run && !self.args.config.incremental {
-            File::delete_all(&db, &self.previous_snapshot)?;
+            File::delete_all(&db, self.previous_snapshot.id)?;
             self.previous_snapshot.delete(&db)?;
         }
         snapshot.duration = start.elapsed();
@@ -165,7 +165,7 @@ impl Command for BackupCommand {
             snapshot.mark_completed(&db)?;
         }
         if !self.args.config.incremental {
-            File::insert_history_sync_mode(&db, &snapshot)?;
+            File::insert_history_sync_mode(&db, snapshot.id)?;
         }
         if !self.args.quiet {
             println!();
@@ -192,7 +192,7 @@ impl BackupCommand {
         }
         let mut previous_children = File::children_dirs(
             db,
-            &self.previous_snapshot,
+            self.previous_snapshot.id,
             root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
         )?;
         let mut children: Vec<PathBuf> = vec![];
@@ -258,15 +258,15 @@ impl BackupCommand {
                     .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", child)))?;
                 match File::find_entry(db, name)? {
                     Some(dir) => {
-                        if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot)?) {
-                            dir.insert_ref(db, snapshot)?;
+                        if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot.id)?) {
+                            dir.insert_ref(db, snapshot.id)?;
                         }
                     }
                     None => {
                         let metadata = fs::symlink_metadata(child).map_err(|err| CmdError::IoError(IoError::from(child, err)))?;
                         let dir = &mut File::from_metadata(name, metadata);
-                        if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot)?) {
-                            dir.insert(db, snapshot)?;
+                        if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot.id)?) {
+                            dir.insert(db, snapshot.id)?;
                         }
                     }
                 }
@@ -278,7 +278,7 @@ impl BackupCommand {
     }
 
     fn process_files(&self, db: &Database, fs: &FileSystem, stats: &mut Snapshot, dir: &Path, files: Vec<File>) -> Result<(), CmdError> {
-        let mut previous_files = File::children_files(db, &self.previous_snapshot, dir)?;
+        let mut previous_files = File::children_files(db, self.previous_snapshot.id, dir)?;
         for mut file in files {
             if let Some(previous_file) = previous_files.get_mut(&file.fullname()) {
                 self.process_existing_file(db, fs, stats, previous_file, &mut file)?;
@@ -301,7 +301,7 @@ impl BackupCommand {
         if self.args.verbose || self.previous_snapshot.id != 0 {
             println!("  New file {:?}", file.fullname())
         }
-        if !self.args.dry_run && (!self.args.cont || !file.exists(db, snapshot)?) {
+        if !self.args.dry_run && (!self.args.cont || !file.exists(db, snapshot.id)?) {
             self.insert_new_file(db, fs, snapshot, file)?;
         }
         Ok(())
@@ -320,11 +320,11 @@ impl BackupCommand {
             }
             if !self.args.dry_run {
                 if self.args.config.is_incremental(&file.fullname()) {
-                    if !self.args.cont || !file.exists(db, snapshot)? {
+                    if !self.args.cont || !file.exists(db, snapshot.id)? {
                         self.archive_file(db, fs, snapshot, previous_file)?;
                         self.insert_new_file(db, fs, snapshot, file)?;
                     }
-                } else if !self.args.cont || !file.exists(db, snapshot)? {
+                } else if !self.args.cont || !file.exists(db, snapshot.id)? {
                     self.insert_new_file(db, fs, snapshot, file)?;
                     self.remove_previous_file(db, fs, previous_file, file)?;
                 }
@@ -332,7 +332,7 @@ impl BackupCommand {
         } else {
             snapshot.unchanged_count += 1;
             snapshot.unchanged_size += file.size;
-            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, snapshot)?) {
+            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, snapshot.id)?) {
                 self.insert_unchanged_file(db, fs, snapshot, previous_file)?;
             }
         }
@@ -350,10 +350,10 @@ impl BackupCommand {
         }
         if !self.args.dry_run {
             if self.args.config.is_incremental(&file.fullname()) {
-                if !self.args.cont || !file.archive_exists(db, snapshot)? || !fs.exists(file, &self.args.config.target) {
+                if !self.args.cont || !file.archive_exists(db, snapshot.id)? || !fs.exists(file, &self.args.config.target) {
                     self.archive_file(db, fs, snapshot, file)?;
                 }
-            } else if !self.args.cont || file.exists(db, snapshot)? {
+            } else if !self.args.cont || file.exists(db, snapshot.id)? {
                 self.remove_file(db, fs, file)?;
             }
         }
@@ -364,20 +364,20 @@ impl BackupCommand {
         if self.args.verbose || self.previous_snapshot.id != 0 {
             println!("Deleted dir {:?}", dir.fullname())
         }
-        let files = File::children_files(db, &self.previous_snapshot, &dir.fullname())?;
+        let files = File::children_files(db, self.previous_snapshot.id, &dir.fullname())?;
         for (_, mut file) in files {
             self.process_deleted_file(db, fs, snapshot, &mut file)?;
         }
-        let dirs = File::children_dirs(db, &self.previous_snapshot, &dir.fullname())?;
+        let dirs = File::children_dirs(db, self.previous_snapshot.id, &dir.fullname())?;
         for (_, mut dir) in dirs {
             self.process_deleted_dir(db, fs, snapshot, &mut dir)?;
         }
         if !self.args.dry_run {
             if self.args.config.is_incremental(&dir.fullname()) {
-                if !self.args.cont || !dir.archive_exists(db, snapshot)? {
+                if !self.args.cont || !dir.archive_exists(db, snapshot.id)? {
                     self.archive_dir(db, fs, snapshot, dir)?;
                 }
-            } else if !self.args.cont || dir.exists(db, snapshot)? {
+            } else if !self.args.cont || dir.exists(db, snapshot.id)? {
                 self.remove_dir(db, fs, dir)?;
             }
         }
@@ -409,20 +409,20 @@ impl BackupCommand {
     fn insert_new_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
         file.digest = fs.compute_digest(file, &self.args.config.source)?;
         fs.copy_new_file(file, self.args.config.hash_comparison)?;
-        file.insert(db, snapshot)
+        file.insert(db, snapshot.id)
     }
 
     fn insert_unchanged_file(&self, db: &Database, _fs: &FileSystem, snapshot: &Snapshot, file: &File) -> Result<(), CmdError> {
-        file.insert_ref(db, snapshot)
+        file.insert_ref(db, snapshot.id)
     }
 
     fn archive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
-        file.archive(db, snapshot)?;
+        file.archive(db, snapshot.id)?;
         fs.archive_file(snapshot.id, file)
     }
 
     fn archive_dir(&self, db: &Database, _fs: &FileSystem, snapshot: &Snapshot, dir: &mut File) -> Result<(), CmdError> {
-        dir.archive(db, snapshot)
+        dir.archive(db, snapshot.id)
     }
 
     fn remove_previous_file(&self, db: &Database, _fs: &FileSystem, previous_file: &File, file: &File) -> Result<(), CmdError> {
@@ -451,17 +451,11 @@ impl BackupCommand {
         }
         snapshot.excluded_dirs = statistics.dirs;
         snapshot.excluded_files = statistics.files;
-        println!("source");
-        dir.display(0);
-        println!();
         let prev_dir = self.read_previous_source(db)?;
-        println!("previous");
-        prev_dir.display(0);
-        let todo = self.compare_tree(dir, prev_dir);
-        println!("diff");
-        todo.display();
+        let _todo = self.compare_tree(dir, prev_dir);
         Ok(())
     }
+
     fn read_source(args: Arc<BackupArgs>, pid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
         Box::pin(async move {
             let mut statistics = Statistics::default();
@@ -547,7 +541,7 @@ impl BackupCommand {
     }
 
     fn read_previous_source(&self, db: &Database) -> Result<Directory, CmdError> {
-        let entries = File::all_entries(db, &self.previous_snapshot)?;
+        let entries = File::all_entries(db, self.previous_snapshot.id)?;
         let mut by_path: HashMap<PathBuf, Vec<File>> = HashMap::new();
         for entry in entries {
             by_path.entry(entry.path.clone()).or_default().push(entry);

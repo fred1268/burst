@@ -98,7 +98,7 @@ impl Command for RestoreCommand {
 
 impl RestoreCommand {
     fn restore(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot) -> Result<(), CmdError> {
-        let files = File::entries_matching(db, snapshot, &self.args.pattern)?;
+        let files = File::entries_matching(db, snapshot.id, &self.args.pattern)?;
         for file in files {
             if self.args.verbose {
                 println!("Restoring {}", file);

@@ -156,7 +156,7 @@ impl DeleteCommand {
             }
         }
         if let Some(snapshot) = Snapshot::get_latest(db)? {
-            let files = File::files(db, &snapshot)?;
+            let files = File::files(db, snapshot.id)?;
             for mut file in files {
                 if file.is_archived() {
                     if self.args.verbose {
@@ -167,7 +167,7 @@ impl DeleteCommand {
                     }
                 }
             }
-            let dirs = File::dirs(db, &snapshot)?;
+            let dirs = File::dirs(db, snapshot.id)?;
             for mut dir in dirs {
                 if dir.is_archived() {
                     if self.args.verbose {

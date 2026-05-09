@@ -1,5 +1,4 @@
 use crate::cmds::constants::BURST_VERSION_DIR;
-use crate::cmds::snapshot::Snapshot;
 use crate::tools::cmderror::CmdError::{self};
 use crate::tools::db::Database;
 use crate::tools::fmt::human_readable_size;
@@ -195,16 +194,16 @@ impl File {
         Ok(None)
     }
 
-    pub fn exists(&self, db: &Database, snapshot: &Snapshot) -> Result<bool, CmdError> {
+    pub fn exists(&self, db: &Database, sid: u64) -> Result<bool, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND path=?2 AND name=?3");
-        db.exists(&sql, params![snapshot.id, String::from(self.path.to_str().unwrap()), String::from(self.name.to_str().unwrap())])
+        db.exists(&sql, params![sid, String::from(self.path.to_str().unwrap()), String::from(self.name.to_str().unwrap())])
     }
 
-    pub fn archive_exists(&self, db: &Database, snapshot: &Snapshot) -> Result<bool, CmdError> {
+    pub fn archive_exists(&self, db: &Database, sid: u64) -> Result<bool, CmdError> {
         let mut sql = String::from(READ_NO_SNAPSHOT);
         sql.push_str(" WHERE deleted_sid=?1 AND path=?2 AND name=?3");
-        db.exists(&sql, params![snapshot.id, String::from(self.path.to_str().unwrap()), String::from(self.name.to_str().unwrap())])
+        db.exists(&sql, params![sid, String::from(self.path.to_str().unwrap()), String::from(self.name.to_str().unwrap())])
     }
 
     pub fn history(db: &Database, name: &str) -> Result<Vec<File>, CmdError> {
@@ -235,16 +234,16 @@ impl File {
         File::list(db, &sql, params![])
     }
 
-    pub fn deleted_files(db: &Database, previous_snapshot: &Snapshot, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+    pub fn deleted_files(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND deleted_sid=?2 AND fv.is_dir=0 ORDER BY fv.path ASC, fv.name ASC");
-        File::list(db, &sql, params![previous_snapshot.id, snapshot.id])
+        File::list(db, &sql, params![psid, sid])
     }
 
-    pub fn deleted_files_sync_mode(db: &Database, previous_snapshot: &Snapshot, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+    pub fn deleted_files_sync_mode(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ_SYNC_MODE);
         sql.push_str(" WHERE snapshot_id=?1 AND is_dir=0 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) ORDER BY path ASC, name ASC");
-        File::list(db, &sql, params![previous_snapshot.id, snapshot.id])
+        File::list(db, &sql, params![psid, sid])
     }
 
     pub fn filesystem_dirs(db: &Database) -> Result<Vec<File>, CmdError> {
@@ -266,55 +265,55 @@ impl File {
         File::list(db, &sql, params![])
     }
 
-    pub fn children_dirs(db: &Database, snapshot: &Snapshot, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
-        Self::children(db, snapshot, path, What::Dirs)
+    pub fn children_dirs(db: &Database, sid: u64, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
+        Self::children(db, sid, path, What::Dirs)
     }
 
-    pub fn children_files(db: &Database, snapshot: &Snapshot, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
-        Self::children(db, snapshot, path, What::Files)
+    pub fn children_files(db: &Database, sid: u64, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
+        Self::children(db, sid, path, What::Files)
     }
 
-    fn children(db: &Database, snapshot: &Snapshot, path: &Path, what: What) -> Result<HashMap<PathBuf, File>, CmdError> {
+    fn children(db: &Database, sid: u64, path: &Path, what: What) -> Result<HashMap<PathBuf, File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND fv.path=?2");
         Self::entry_type(&mut sql, what);
-        File::list_by_path(db, &sql, params![snapshot.id, path.to_str().unwrap()])
+        File::list_by_path(db, &sql, params![sid, path.to_str().unwrap()])
     }
 
-    pub fn all_entries(db: &Database, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+    pub fn all_entries(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1");
         sql.push_str(" ORDER BY fv.path ASC, fv.is_dir DESC, fv.name ASC");
-        File::list(db, &sql, params![snapshot.id])
+        File::list(db, &sql, params![sid])
     }
 
-    pub fn dirs(db: &Database, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
-        Self::entries(db, snapshot, What::Dirs)
+    pub fn dirs(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
+        Self::entries(db, sid, What::Dirs)
     }
 
-    pub fn files(db: &Database, snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
-        Self::entries(db, snapshot, What::Files)
+    pub fn files(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
+        Self::entries(db, sid, What::Files)
     }
 
-    fn entries(db: &Database, snapshot: &Snapshot, what: What) -> Result<Vec<File>, CmdError> {
+    fn entries(db: &Database, sid: u64, what: What) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1");
         Self::entry_type(&mut sql, what);
         sql.push_str(" ORDER BY fv.path ASC, fv.name ASC");
-        File::list(db, &sql, params![snapshot.id])
+        File::list(db, &sql, params![sid])
     }
 
-    pub fn diff(db: &Database, snapshot: &Snapshot, previous_snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+    pub fn diff(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         // in previous snapshot, but not in current
         sql.push_str(" WHERE sf.snapshot_id=?2 AND deleted_sid!=0 AND fv.id NOT IN (SELECT version_id FROM snapshotfiles WHERE snapshot_id=?1) UNION ");
         sql.push_str(READ);
         // in current snapshot, but not in previous
         sql.push_str(" WHERE sf.snapshot_id=?1 AND fv.id NOT IN (SELECT version_id FROM snapshotfiles WHERE snapshot_id=?2) ORDER BY fv.path ASC, fv.name");
-        File::list(db, &sql, params![snapshot.id, previous_snapshot.id])
+        File::list(db, &sql, params![sid, psid])
     }
 
-    pub fn diff_sync_mode(db: &Database, snapshot: &Snapshot, previous_snapshot: &Snapshot) -> Result<Vec<File>, CmdError> {
+    pub fn diff_sync_mode(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ_SYNC_MODE);
         // in previous snapshot, but not in current
         sql.push_str(" WHERE snapshot_id=?2 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?1) UNION ");
@@ -323,19 +322,19 @@ impl File {
         sql.push_str(" WHERE snapshot_id=?1 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) UNION ");
         sql.push_str(READ_SYNC_MODE);
         sql.push_str(" fh WHERE snapshot_id=?1 AND path||name IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2 AND (fh.modified!= modified OR fh.size!= size)) ORDER BY path ASC, name");
-        File::list(db, &sql, params![snapshot.id, previous_snapshot.id])
+        File::list(db, &sql, params![sid, psid])
     }
 
-    pub fn dirs_matching(db: &Database, snapshot: &Snapshot, spec: &str) -> Result<Vec<File>, CmdError> {
-        Self::matching(db, snapshot.id, spec, What::Dirs)
+    pub fn dirs_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
+        Self::matching(db, sid, spec, What::Dirs)
     }
 
-    pub fn files_matching(db: &Database, snapshot: &Snapshot, spec: &str) -> Result<Vec<File>, CmdError> {
-        Self::matching(db, snapshot.id, spec, What::Files)
+    pub fn files_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
+        Self::matching(db, sid, spec, What::Files)
     }
 
-    pub fn entries_matching(db: &Database, snapshot: &Snapshot, spec: &str) -> Result<Vec<File>, CmdError> {
-        Self::matching(db, snapshot.id, spec, What::All)
+    pub fn entries_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
+        Self::matching(db, sid, spec, What::All)
     }
 
     fn matching(db: &Database, sid: u64, spec: &str, what: What) -> Result<Vec<File>, CmdError> {
@@ -348,7 +347,7 @@ impl File {
         File::list(db, &sql, params![sid, spec])
     }
 
-    pub fn insert(&mut self, db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
+    pub fn insert(&mut self, db: &Database, sid: u64) -> Result<(), CmdError> {
         let id = db.query_one(
             INSERT,
             params![
@@ -367,22 +366,22 @@ impl File {
         match id {
             Some(id) => {
                 self.id = id;
-                self.insert_ref(db, snapshot)
+                self.insert_ref(db, sid)
             }
             None => Err(CmdError::GenericError(format!("Expecting id after {}", INSERT))),
         }
     }
 
-    pub fn insert_ref(&self, db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
-        db.execute(INSERT_REF, params![snapshot.id, self.id])
+    pub fn insert_ref(&self, db: &Database, sid: u64) -> Result<(), CmdError> {
+        db.execute(INSERT_REF, params![sid, self.id])
     }
 
-    pub fn insert_history_sync_mode(db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
-        db.execute(INSERT_HISTORY_SYNC_MODE, params![snapshot.id])
+    pub fn insert_history_sync_mode(db: &Database, sid: u64) -> Result<(), CmdError> {
+        db.execute(INSERT_HISTORY_SYNC_MODE, params![sid])
     }
 
-    pub fn archive(&mut self, db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
-        self.archive = PathBuf::from(BURST_VERSION_DIR).join(snapshot.id.to_string());
+    pub fn archive(&mut self, db: &Database, sid: u64) -> Result<(), CmdError> {
+        self.archive = PathBuf::from(BURST_VERSION_DIR).join(sid.to_string());
         db.execute(ARCHIVE, params![self.id, self.archive.to_str().unwrap(), self.deleted_sid])
     }
 
@@ -431,8 +430,8 @@ impl File {
         }
     }
 
-    pub fn delete_all(db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
-        File::delete_all_by_sid(db, snapshot.id)
+    pub fn delete_all(db: &Database, sid: u64) -> Result<(), CmdError> {
+        File::delete_all_by_sid(db, sid)
     }
 
     pub fn delete_all_by_sid(db: &Database, sid: u64) -> Result<(), CmdError> {
