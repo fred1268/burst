@@ -16,12 +16,14 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
 
-struct Excluded {
+#[derive(Default)]
+struct Statistics {
     pub dirs: u64,
     pub files: u64,
+    pub has_files: bool,
 }
 
-type ReadDirectoryResult = Result<(Directory, Excluded), CmdError>;
+type ReadDirectoryResult = Result<(Directory, Statistics), CmdError>;
 
 #[derive(Default)]
 struct Todo {
@@ -148,10 +150,13 @@ impl Command for BackupCommand {
         }
 
         // let rt = tokio::runtime::Runtime::new().map_err(|e| CmdError::GenericError(e.to_string()))?;
-        // let (dir, stats) =
+        // let (dir, statistics) =
         //     rt.block_on(Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()))?;
-        // snapshot.excluded_dirs = stats.dirs;
-        // snapshot.excluded_files = stats.files;
+        // if !statistics.has_files && !self.args.quiet {
+        //     println!("Warning: backup is empty");
+        // }
+        // snapshot.excluded_dirs = statistics.dirs;
+        // snapshot.excluded_files = statistics.files;
         // println!("source");
         // dir.display(0);
         // println!();
@@ -159,12 +164,13 @@ impl Command for BackupCommand {
         // println!("previous");
         // prev_dir.display(0);
         // let todo = self.compare_tree(dir, prev_dir);
+        // println!("diff");
         // todo.display();
-
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
         if !self.process_directory(&db, &fs, &mut snapshot, &self.args.config.source)? && !self.args.quiet {
             println!("Warning: backup is empty");
         }
+
         if !self.args.dry_run && !self.args.config.incremental {
             File::delete_all(&db, &self.previous_snapshot)?;
             self.previous_snapshot.delete(&db)?;
@@ -352,7 +358,7 @@ impl BackupCommand {
         }
         if !self.args.dry_run {
             if self.args.config.is_incremental(&file.fullname()) {
-                if !self.args.cont || !file.archive_exists(db, snapshot)? {
+                if !self.args.cont || !file.archive_exists(db, snapshot)? || !fs.exists(file, &self.args.config.target) {
                     self.archive_file(db, fs, snapshot, file)?;
                 }
             } else if !self.args.cont || file.exists(db, snapshot)? {
@@ -386,10 +392,32 @@ impl BackupCommand {
         Ok(())
     }
 
+    // Operation order and failure analysis (--continue recovery):
+    //
+    // | Operation             | Order       | DB fails                          | FS fails                                     |
+    // |-----------------------|-------------|-----------------------------------|----------------------------------------------|
+    // | insert_unchanged_file | DB only     | nothing done → retries ✓          | —                                            |
+    // | archive_dir           | DB only     | nothing done → retries ✓          | —                                            |
+    // | remove_previous_file  | DB only     | nothing done → retries ✓          | —                                            |
+    // | archive_file          | DB → FS     | nothing done → retries ✓          | DB updated, rename not done → --continue     |
+    // |                       |             |                                   | checks fs.exists() at archive path: false →  |
+    // |                       |             |                                   | retries (DB update idempotent, rename ok) ✓  |
+    // | insert_new_file       | FS → DB     | orphan file on disk → retries ✓   | nothing done → retries ✓                     |
+    // | remove_file           | DB → FS     | orphan file on disk, backup ok ✓  | —                                            |
+    // | remove_dir            | DB → FS     | orphan dir on disk, backup ok ✓   | —                                            |
+    //
+    // insert_new_file is intentionally FS-first (digest → copy → insert) so that a DB failure
+    // leaves an orphan file on disk rather than a phantom DB entry. The orphan is harmless:
+    // --continue sees file.exists()=false and retries, re-copying over the orphan.
+    //
+    // archive_file uses DB-first so a DB failure leaves nothing done (clean retry). The FS failure
+    // case (rename failed after DB update) is recovered by --continue via an extra fs.exists() check
+    // in process_deleted_file: archive_exists()=true but fs.exists()=false → retries the rename.
+
     fn insert_new_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
         file.digest = fs.compute_digest(file, &self.args.config.source)?;
-        file.insert(db, snapshot)?;
-        fs.copy_new_file(file, self.args.config.hash_comparison)
+        fs.copy_new_file(file, self.args.config.hash_comparison)?;
+        file.insert(db, snapshot)
     }
 
     fn insert_unchanged_file(&self, db: &Database, _fs: &FileSystem, snapshot: &Snapshot, file: &File) -> Result<(), CmdError> {
@@ -424,7 +452,7 @@ impl BackupCommand {
 
     fn read_source(args: Arc<BackupArgs>, pid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
         Box::pin(async move {
-            let mut excluded = Excluded { dirs: 0, files: 0 };
+            let mut statistics = Statistics::default();
             if !args.quiet && pid == 0 {
                 println!("Directory {:?}", root);
             }
@@ -444,12 +472,12 @@ impl BackupCommand {
                 }
                 if args.config.is_excluded(&p) {
                     if metadata.is_dir() {
-                        excluded.dirs += 1;
+                        statistics.dirs += 1;
                         if args.verbose {
                             println!("Excluded directory {:?}", p)
                         }
                     } else {
-                        excluded.files += 1;
+                        statistics.files += 1;
                         if args.verbose {
                             println!("  Excluded file {:?}", p.file_name().unwrap())
                         }
@@ -460,6 +488,7 @@ impl BackupCommand {
                     subdirs.push(p);
                     continue;
                 }
+                statistics.has_files = true;
                 files.insert(File::from_metadata(
                     p.strip_prefix(&args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                     metadata,
@@ -471,9 +500,10 @@ impl BackupCommand {
             }
             let mut children = HashSet::new();
             while let Some(dir) = set.join_next().await {
-                let (dir, excl) = dir.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
-                excluded.dirs += excl.dirs;
-                excluded.files += excl.files;
+                let (dir, stats) = dir.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                statistics.dirs += stats.dirs;
+                statistics.files += stats.files;
+                statistics.has_files |= stats.has_files;
                 children.insert(dir);
             }
             Ok((
@@ -485,7 +515,7 @@ impl BackupCommand {
                     files,
                     children,
                 ),
-                excluded,
+                statistics,
             ))
         })
     }
