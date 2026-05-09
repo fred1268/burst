@@ -32,41 +32,7 @@ struct Todo {
     pub file_added: Vec<File>,
     pub file_deleted: Vec<File>,
     pub file_modified: Vec<(File, File)>,
-}
-
-impl Todo {
-    pub fn display(&self) {
-        if !self.dir_added.is_empty() {
-            println!("Added directories:");
-            for dir in &self.dir_added {
-                println!("  {:?}", dir.name);
-            }
-        }
-        if !self.dir_deleted.is_empty() {
-            println!("Deleted directories:");
-            for dir in &self.dir_deleted {
-                println!("  {:?}", dir.name);
-            }
-        }
-        if !self.file_added.is_empty() {
-            println!("Added files:");
-            for file in &self.file_added {
-                println!("  {:?}", file.fullname());
-            }
-        }
-        if !self.file_deleted.is_empty() {
-            println!("Deleted files:");
-            for file in &self.file_deleted {
-                println!("  {:?}", file.fullname());
-            }
-        }
-        if !self.file_modified.is_empty() {
-            println!("Modified files:");
-            for (prev, new) in &self.file_modified {
-                println!("  {:?} -> {:?}", prev.fullname(), new.fullname());
-            }
-        }
-    }
+    pub file_unchanged: Vec<File>,
 }
 
 pub struct BackupCommand {
@@ -558,8 +524,10 @@ impl BackupCommand {
     fn recurse_compare_tree(&self, src: Directory, mut prev: Directory, todo: &mut Todo) {
         for file in src.files {
             if let Some(prev_file) = prev.files.take(&file) {
-                if prev_file != file {
+                if prev_file.size != file.size || prev_file.modified != file.modified {
                     todo.file_modified.push((file, prev_file));
+                } else {
+                    todo.file_unchanged.push(prev_file);
                 }
                 continue;
             }
