@@ -49,43 +49,43 @@ impl Command for HelpCommand {
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
         Box::pin(async move {
-        match self.args.command.as_str() {
-            "" => self.help(),
-            "init" => {
-                let cmd = InitCommand::default();
-                cmd.help();
+            match self.args.command.as_str() {
+                "" => self.help(),
+                "init" => {
+                    let cmd = InitCommand::default();
+                    cmd.help();
+                }
+                "backup" => {
+                    let cmd = BackupCommand::default();
+                    cmd.help();
+                }
+                "list" => {
+                    let cmd = ListCommand::default();
+                    cmd.help();
+                }
+                "history" => {
+                    let cmd = HistoryCommand::default();
+                    cmd.help();
+                }
+                "delete" => {
+                    let cmd = DeleteCommand::default();
+                    cmd.help();
+                }
+                "restore" => {
+                    let cmd = RestoreCommand::default();
+                    cmd.help();
+                }
+                "config" => {
+                    let cmd = ConfigCommand::default();
+                    cmd.help();
+                }
+                "verify" => {
+                    let cmd = VerifyCommand::default();
+                    cmd.help();
+                }
+                _ => (),
             }
-            "backup" => {
-                let cmd = BackupCommand::default();
-                cmd.help();
-            }
-            "list" => {
-                let cmd = ListCommand::default();
-                cmd.help();
-            }
-            "history" => {
-                let cmd = HistoryCommand::default();
-                cmd.help();
-            }
-            "delete" => {
-                let cmd = DeleteCommand::default();
-                cmd.help();
-            }
-            "restore" => {
-                let cmd = RestoreCommand::default();
-                cmd.help();
-            }
-            "config" => {
-                let cmd = ConfigCommand::default();
-                cmd.help();
-            }
-            "verify" => {
-                let cmd = VerifyCommand::default();
-                cmd.help();
-            }
-            _ => (),
-        }
-        Ok(())
+            Ok(())
         })
     }
 }

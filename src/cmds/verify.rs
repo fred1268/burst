@@ -57,37 +57,37 @@ impl Command for VerifyCommand {
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
         Box::pin(async move {
-        let start = Instant::now();
-        if self.args.verbose {
-            println!("verify command started");
-            println!("Running {}", self.args);
-        }
-        match command::start(&self.args.config.target).await {
-            Ok(_) => (),
-            Err(err) => match err {
-                CmdError::NoRemote() => return Err(InvalidBackupDirectory()),
-                _ => return Err(err),
-            },
-        };
-        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
-        let db = Database::open(&self.args.config.target).await?;
-        let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
-        match self.args.topic.as_str() {
-            "hash" => self.hash(&db, &fs).await?,
-            "integrity" => self.integrity(&db, &fs).await?,
-            _ => (),
-        }
-        if !self.args.quiet {
-            match self.warnings {
-                0 => println!("Verification successfully completed in {}", human_readable_duration(start.elapsed().as_secs())),
-                _ => println!(
-                    "Verification completed in {} with {} warning",
-                    human_readable_duration(start.elapsed().as_secs()),
-                    self.warnings
-                ),
+            let start = Instant::now();
+            if self.args.verbose {
+                println!("verify command started");
+                println!("Running {}", self.args);
             }
-        }
-        command::stop(&self.args.config.target).await
+            match command::start(&self.args.config.target).await {
+                Ok(_) => (),
+                Err(err) => match err {
+                    CmdError::NoRemote() => return Err(InvalidBackupDirectory()),
+                    _ => return Err(err),
+                },
+            };
+            self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+            let db = Database::open(&self.args.config.target).await?;
+            let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
+            match self.args.topic.as_str() {
+                "hash" => self.hash(&db, &fs).await?,
+                "integrity" => self.integrity(&db, &fs).await?,
+                _ => (),
+            }
+            if !self.args.quiet {
+                match self.warnings {
+                    0 => println!("Verification successfully completed in {}", human_readable_duration(start.elapsed().as_secs())),
+                    _ => println!(
+                        "Verification completed in {} with {} warning",
+                        human_readable_duration(start.elapsed().as_secs()),
+                        self.warnings
+                    ),
+                }
+            }
+            command::stop(&self.args.config.target).await
         })
     }
 }
@@ -167,7 +167,9 @@ impl VerifyCommand {
                         p.strip_prefix(&self.args.config.target)
                             .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                     ),
-                ).await? {
+                )
+                .await?
+                {
                     Some(_) => {
                         if p.is_dir() {
                             dirs.push(p);

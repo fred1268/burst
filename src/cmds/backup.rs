@@ -71,25 +71,25 @@ impl Command for BackupCommand {
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
         Box::pin(async move {
-        let start = Instant::now();
-        if self.args.verbose {
-            println!("backup command started");
-            println!("Running {}", self.args);
-        }
-        match command::start(&self.args.config.target).await {
-            Ok(_) => (),
-            Err(err) => match err {
-                CmdError::NoRemote() => {
-                    if !self.args.dry_run {
-                        return Err(InvalidBackupDirectory());
+            let start = Instant::now();
+            if self.args.verbose {
+                println!("backup command started");
+                println!("Running {}", self.args);
+            }
+            match command::start(&self.args.config.target).await {
+                Ok(_) => (),
+                Err(err) => match err {
+                    CmdError::NoRemote() => {
+                        if !self.args.dry_run {
+                            return Err(InvalidBackupDirectory());
+                        }
                     }
-                }
-                _ => return Err(err),
-            },
-        };
-        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
-        let db = Database::open(&self.args.config.target).await?;
-        let mut snapshot = match self.args.dry_run {
+                    _ => return Err(err),
+                },
+            };
+            self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+            let db = Database::open(&self.args.config.target).await?;
+            let mut snapshot = match self.args.dry_run {
             true => Some(Snapshot::default()),
             false => match self.args.cont {
                 true => {
@@ -108,44 +108,44 @@ impl Command for BackupCommand {
             },
         }
         .unwrap_or_default();
-        if self.args.dry_run {
-            if let Some(ps) = Snapshot::get_latest(&db).await? {
+            if self.args.dry_run {
+                if let Some(ps) = Snapshot::get_latest(&db).await? {
+                    self.previous_snapshot = ps;
+                }
+            } else if let Some(ps) = Snapshot::get_previous(&db, snapshot.id).await? {
                 self.previous_snapshot = ps;
             }
-        } else if let Some(ps) = Snapshot::get_previous(&db, snapshot.id).await? {
-            self.previous_snapshot = ps;
-        }
 
-        if self.args.parallel {
-            self.async_do_backup(&db, &mut snapshot).await?;
-        } else {
-            self.sync_do_backup(&db, &mut snapshot).await?;
-        }
+            if self.args.parallel {
+                self.onepass_do_backup(&db, &mut snapshot).await?;
+            } else {
+                self.do_backup(&db, &mut snapshot).await?;
+            }
 
-        if !self.args.dry_run && !self.args.config.incremental {
-            File::delete_all(&db, self.previous_snapshot.id).await?;
-            self.previous_snapshot.delete(&db).await?;
-        }
-        snapshot.duration = start.elapsed();
-        snapshot.status = String::from("success");
-        if !self.args.dry_run {
-            snapshot.mark_completed(&db).await?;
-        }
-        if !self.args.config.incremental {
-            File::insert_history_sync_mode(&db, snapshot.id).await?;
-        }
-        if !self.args.quiet {
-            println!();
-            Snapshot::header();
-            println!("{}", snapshot);
-        }
-        command::stop(&self.args.config.target).await
+            if !self.args.dry_run && !self.args.config.incremental {
+                File::delete_all(&db, self.previous_snapshot.id).await?;
+                self.previous_snapshot.delete(&db).await?;
+            }
+            snapshot.duration = start.elapsed();
+            snapshot.status = String::from("success");
+            if !self.args.dry_run {
+                snapshot.mark_completed(&db).await?;
+            }
+            if !self.args.config.incremental {
+                File::insert_history_sync_mode(&db, snapshot.id).await?;
+            }
+            if !self.args.quiet {
+                println!();
+                Snapshot::header();
+                println!("{}", snapshot);
+            }
+            command::stop(&self.args.config.target).await
         })
     }
 }
 
 impl BackupCommand {
-    async fn sync_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
+    async fn do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
         if !self.process_directory(db, &fs, snapshot, &self.args.config.source).await? && !self.args.quiet {
             println!("Warning: backup is empty");
@@ -153,7 +153,9 @@ impl BackupCommand {
         Ok(())
     }
 
-    fn process_directory<'a>(&'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, root: &'a Path) -> Pin<Box<dyn Future<Output = Result<bool, CmdError>> + 'a>> {
+    fn process_directory<'a>(
+        &'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, root: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, CmdError>> + 'a>> {
         Box::pin(async move {
             snapshot.dirs += 1;
             if !self.args.quiet && self.previous_snapshot.id == 0 {
@@ -162,8 +164,10 @@ impl BackupCommand {
             let mut previous_children = File::children_dirs(
                 db,
                 self.previous_snapshot.id,
-                root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
-            ).await?;
+                root.strip_prefix(&self.args.config.source)
+                    .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
+            )
+            .await?;
             let mut children: Vec<PathBuf> = vec![];
             let mut files: Vec<File> = vec![];
             let entries = fs::read_dir(root).map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
@@ -205,7 +209,8 @@ impl BackupCommand {
                 }
                 contains_files = true;
                 files.push(File::from_metadata(
-                    p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
+                    p.strip_prefix(&self.args.config.source)
+                        .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                     metadata,
                 ));
             }
@@ -216,9 +221,11 @@ impl BackupCommand {
                 db,
                 fs,
                 snapshot,
-                root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
+                root.strip_prefix(&self.args.config.source)
+                    .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
                 files,
-            ).await?;
+            )
+            .await?;
             let mut n = children.len();
             for child in &children {
                 if self.process_directory(db, fs, snapshot, child).await? {
@@ -247,7 +254,9 @@ impl BackupCommand {
         })
     }
 
-    async fn process_files(&self, db: &Database, fs: &FileSystem, stats: &mut Snapshot, dir: &Path, files: Vec<File>) -> Result<(), CmdError> {
+    async fn process_files(
+        &self, db: &Database, fs: &FileSystem, stats: &mut Snapshot, dir: &Path, files: Vec<File>,
+    ) -> Result<(), CmdError> {
         let mut previous_files = File::children_files(db, self.previous_snapshot.id, dir).await?;
         for mut file in files {
             if let Some(previous_file) = previous_files.get_mut(&file.fullname()) {
@@ -330,7 +339,9 @@ impl BackupCommand {
         Ok(())
     }
 
-    fn process_deleted_dir<'a>(&'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, dir: &'a mut File) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + 'a>> {
+    fn process_deleted_dir<'a>(
+        &'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, dir: &'a mut File,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + 'a>> {
         Box::pin(async move {
             if self.args.verbose || self.previous_snapshot.id != 0 {
                 println!("Deleted dir {:?}", dir.fullname())
@@ -414,7 +425,7 @@ impl BackupCommand {
         fs.remove_dir(dir).await
     }
 
-    async fn async_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
+    async fn onepass_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
         let (dir, statistics) =
             Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()).await?;
         if !statistics.has_files && !self.args.quiet {

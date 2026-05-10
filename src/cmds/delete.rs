@@ -7,10 +7,10 @@ use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOpti
 use crate::tools::db::Database;
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
-use std::future::Future;
-use std::pin::Pin;
 use chrono::Datelike;
 use regex::Regex;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Instant;
 
 pub struct DeleteCommand {
@@ -61,49 +61,49 @@ impl Command for DeleteCommand {
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
         Box::pin(async move {
-        let start = Instant::now();
-        if self.args.verbose {
-            println!("delete command started");
-            println!("Running {}", self.args);
-        }
-        match command::start(&self.args.config.target).await {
-            Ok(_) => (),
-            Err(err) => match err {
-                CmdError::NoRemote() => {
-                    if !self.args.dry_run {
-                        return Err(InvalidBackupDirectory());
+            let start = Instant::now();
+            if self.args.verbose {
+                println!("delete command started");
+                println!("Running {}", self.args);
+            }
+            match command::start(&self.args.config.target).await {
+                Ok(_) => (),
+                Err(err) => match err {
+                    CmdError::NoRemote() => {
+                        if !self.args.dry_run {
+                            return Err(InvalidBackupDirectory());
+                        }
+                    }
+                    _ => return Err(err),
+                },
+            };
+            self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+            let db = Database::open(&self.args.config.target).await?;
+            let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
+            if self.args.keep_last != 0 {
+                let snapshots = Snapshot::get_except_last(&db, self.args.keep_last).await?;
+                for snapshot in snapshots {
+                    if !self.args.sids.contains(&snapshot.id) {
+                        self.args.sids.push(snapshot.id);
                     }
                 }
-                _ => return Err(err),
-            },
-        };
-        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
-        let db = Database::open(&self.args.config.target).await?;
-        let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
-        if self.args.keep_last != 0 {
-            let snapshots = Snapshot::get_except_last(&db, self.args.keep_last).await?;
-            for snapshot in snapshots {
-                if !self.args.sids.contains(&snapshot.id) {
-                    self.args.sids.push(snapshot.id);
+            } else if self.args.older_than.year() != 1970 {
+                let snapshots = Snapshot::get_before(&db, self.args.older_than).await?;
+                for snapshot in snapshots {
+                    if !self.args.sids.contains(&snapshot.id) {
+                        self.args.sids.push(snapshot.id);
+                    }
                 }
             }
-        } else if self.args.older_than.year() != 1970 {
-            let snapshots = Snapshot::get_before(&db, self.args.older_than).await?;
-            for snapshot in snapshots {
-                if !self.args.sids.contains(&snapshot.id) {
-                    self.args.sids.push(snapshot.id);
-                }
+            match self.args.config.incremental {
+                true => self.delete_history_incremental(&db, &fs).await?,
+                false => self.delete_history_non_incremental(&db, &fs).await?,
             }
-        }
-        match self.args.config.incremental {
-            true => self.delete_history_incremental(&db, &fs).await?,
-            false => self.delete_history_non_incremental(&db, &fs).await?,
-        }
-        self.clean_up(&db, &fs).await?;
-        if !self.args.quiet {
-            println!("Files successfully deleted from history in {}", human_readable_duration(start.elapsed().as_secs()));
-        }
-        command::stop(&self.args.config.target).await
+            self.clean_up(&db, &fs).await?;
+            if !self.args.quiet {
+                println!("Files successfully deleted from history in {}", human_readable_duration(start.elapsed().as_secs()));
+            }
+            command::stop(&self.args.config.target).await
         })
     }
 }

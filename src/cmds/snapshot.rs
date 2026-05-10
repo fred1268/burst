@@ -130,10 +130,8 @@ impl Snapshot {
     }
 
     pub async fn update(&self, db: &Database) -> Result<(), CmdError> {
-        db.execute(
-            UPDATE,
-            |q| q
-                .bind(self.id as i64)
+        db.execute(UPDATE, |q| {
+            q.bind(self.id as i64)
                 .bind(self.duration.as_secs() as i64)
                 .bind(self.status.clone())
                 .bind(self.excluded_dirs as i64)
@@ -148,8 +146,9 @@ impl Snapshot {
                 .bind(self.unchanged_count as i64)
                 .bind(self.unchanged_size as i64)
                 .bind(self.deleted_count as i64)
-                .bind(self.deleted_size as i64),
-        ).await
+                .bind(self.deleted_size as i64)
+        })
+        .await
     }
 
     pub async fn mark_completed(&self, db: &Database) -> Result<(), CmdError> {
@@ -199,7 +198,8 @@ impl Snapshot {
                 deleted_count: row.try_get::<i64, _>(16)? as u64,
                 deleted_size: row.try_get::<i64, _>(17)? as u64,
             })
-        }).await
+        })
+        .await
     }
 
     async fn one<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Option<Snapshot>, CmdError>
@@ -227,6 +227,7 @@ impl Snapshot {
                 deleted_count: row.try_get::<i64, _>(16)? as u64,
                 deleted_size: row.try_get::<i64, _>(17)? as u64,
             })
-        }).await
+        })
+        .await
     }
 }

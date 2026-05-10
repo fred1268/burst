@@ -7,10 +7,10 @@ use crate::cmds::snapshot::Snapshot;
 use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption, InvalidSourceDirectory};
 use crate::tools::db::Database;
 use crate::tools::fs::FileSystem;
-use std::future::Future;
-use std::pin::Pin;
 use regex::Regex;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 
 pub struct ConfigCommand {
     args: ConfigArgs,
@@ -99,40 +99,40 @@ impl Command for ConfigCommand {
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
         Box::pin(async move {
-        if self.args.verbose {
-            println!("config command started");
-            println!("Running {}", self.args);
-        }
-        match command::start(&self.args.config.target).await {
-            Ok(_) => (),
-            Err(err) => match err {
-                CmdError::NoRemote() => match self.args.subcommand.as_str() {
-                    "show" | "get" => (),
-                    _ => {
-                        if !self.args.dry_run {
-                            return Err(InvalidBackupDirectory());
+            if self.args.verbose {
+                println!("config command started");
+                println!("Running {}", self.args);
+            }
+            match command::start(&self.args.config.target).await {
+                Ok(_) => (),
+                Err(err) => match err {
+                    CmdError::NoRemote() => match self.args.subcommand.as_str() {
+                        "show" | "get" => (),
+                        _ => {
+                            if !self.args.dry_run {
+                                return Err(InvalidBackupDirectory());
+                            }
                         }
-                    }
+                    },
+                    _ => return Err(err),
                 },
-                _ => return Err(err),
-            },
-        };
-        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
-        let db = Database::open(&self.args.config.target).await?;
-        let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
-        match self.args.subcommand.as_str() {
-            "show" => self.show(&db, &fs).await?,
-            "get" => self.get(&db, &fs).await?,
-            "set" => self.set(&db, &fs).await?,
-            "add" => self.add(&db, &fs).await?,
-            "remove" => self.remove(&db, &fs).await?,
-            "convert" => self.convert(&db, &fs).await?,
-            _ => (),
-        }
-        if !self.args.quiet {
-            println!("Configuration updated");
-        }
-        command::stop(&self.args.config.target).await
+            };
+            self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+            let db = Database::open(&self.args.config.target).await?;
+            let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
+            match self.args.subcommand.as_str() {
+                "show" => self.show(&db, &fs).await?,
+                "get" => self.get(&db, &fs).await?,
+                "set" => self.set(&db, &fs).await?,
+                "add" => self.add(&db, &fs).await?,
+                "remove" => self.remove(&db, &fs).await?,
+                "convert" => self.convert(&db, &fs).await?,
+                _ => (),
+            }
+            if !self.args.quiet {
+                println!("Configuration updated");
+            }
+            command::stop(&self.args.config.target).await
         })
     }
 }

@@ -64,7 +64,9 @@ pub async fn start(target: &Path) -> Result<(), CmdError> {
 
     exist = tokio::fs::try_exists(&local_cfg).await.map_err(|err| CmdError::IoError(IoError::from(&local_cfg, err)))?;
     if !exist {
-        tokio::fs::copy(&remote_cfg, &local_cfg).await.map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
+        tokio::fs::copy(&remote_cfg, &local_cfg)
+            .await
+            .map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
     }
     exist = tokio::fs::try_exists(&local_db).await.map_err(|err| CmdError::IoError(IoError::from(&local_db, err)))?;
     if !exist {

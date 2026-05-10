@@ -2,8 +2,8 @@ use crate::cmds::constants::BURST_METADATA_FILE;
 use crate::tools::cmderror::{CmdError, DbError};
 use crate::tools::fs::FileSystem;
 use crate::tools::version::VERSION_1_1;
-use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::query::Query;
+use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{Row, Sqlite, SqlitePool};
 use std::path::Path;
 use std::time::Duration;
@@ -42,13 +42,9 @@ impl Database {
     pub async fn open(target: &Path) -> Result<Database, CmdError> {
         let home_dir = FileSystem::home_backup_dir(target);
         let db_file = home_dir.join(BURST_METADATA_FILE);
-        let opts = SqliteConnectOptions::new()
-            .filename(&db_file)
-            .journal_mode(SqliteJournalMode::Wal)
-            .busy_timeout(Duration::from_millis(5000));
-        let pool = SqlitePool::connect_with(opts)
-            .await
-            .map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?;
+        let opts =
+            SqliteConnectOptions::new().filename(&db_file).journal_mode(SqliteJournalMode::Wal).busy_timeout(Duration::from_millis(5000));
+        let pool = SqlitePool::connect_with(opts).await.map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?;
         let db = Database { pool };
         db.check_tables().await?;
         db.upgrade().await?;
@@ -83,10 +79,7 @@ impl Database {
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        let row = bind(sqlx::query(sql))
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
         Ok(row.is_some())
     }
 
@@ -94,10 +87,7 @@ impl Database {
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        bind(sqlx::query(sql))
-            .execute(&self.pool)
-            .await
-            .map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        bind(sqlx::query(sql)).execute(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
         Ok(())
     }
 
@@ -106,10 +96,7 @@ impl Database {
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
         F: FnOnce(SqliteRow) -> Result<T, sqlx::Error>,
     {
-        let row = bind(sqlx::query(sql))
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
         match row {
             Some(r) => Ok(Some(f(r).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?)),
             None => Ok(None),
@@ -121,20 +108,13 @@ impl Database {
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
         F: Fn(SqliteRow) -> Result<T, sqlx::Error>,
     {
-        let rows = bind(sqlx::query(sql))
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-        rows.into_iter()
-            .map(|r| f(r).map_err(|err| CmdError::DbError(DbError::from(sql, err))))
-            .collect()
+        let rows = bind(sqlx::query(sql)).fetch_all(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        rows.into_iter().map(|r| f(r).map_err(|err| CmdError::DbError(DbError::from(sql, err)))).collect()
     }
 
     async fn upgrade(&self) -> Result<(), CmdError> {
         loop {
-            let v: Option<String> = self
-                .query_one(VER_READ, |q| q, |row| row.try_get(0))
-                .await?;
+            let v: Option<String> = self.query_one(VER_READ, |q| q, |row| row.try_get(0)).await?;
             let version = match v {
                 Some(v) => v,
                 None => {

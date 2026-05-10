@@ -79,7 +79,9 @@ impl FileSystem {
         if !tokio::fs::try_exists(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))? {
             tokio::fs::create_dir_all(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
         }
-        tokio::fs::copy(file.source_name(&self.source), to.join(&file.name)).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
+        tokio::fs::copy(file.source_name(&self.source), to.join(&file.name))
+            .await
+            .map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         if compare_hash {
             let digest = self.compute_digest(file, &self.target).await?;
             if digest != file.digest {
@@ -116,7 +118,9 @@ impl FileSystem {
         if !tokio::fs::try_exists(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))? {
             tokio::fs::create_dir_all(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
         }
-        tokio::fs::rename(file.source_name(&self.target), to.join(&file.name)).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))
+        tokio::fs::rename(file.source_name(&self.target), to.join(&file.name))
+            .await
+            .map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))
     }
 
     pub async fn unarchive_file(&self, _sid: u64, file: &File) -> Result<(), CmdError> {
@@ -133,7 +137,9 @@ impl FileSystem {
         match file.is_dir {
             true => self.remove_dir(file).await,
             false => {
-                tokio::fs::remove_file(file.archive_name(&self.target)).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
+                tokio::fs::remove_file(file.archive_name(&self.target))
+                    .await
+                    .map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
                 if let Some(parent) = file.archive_name(&self.target).parent() {
                     self.recurse_remove_empty_dir(parent).await?;
                 }

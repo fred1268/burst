@@ -63,24 +63,24 @@ impl Command for InitCommand {
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
         Box::pin(async move {
-        if self.args.verbose {
-            println!("init command started");
-            println!("Running {}", self.args);
-        }
-        FileSystem::check_home_dir().await?;
-        self.create_directories().await?;
-        self.args.config.write().await?;
-        if self.args.verbose {
-            println!("Configuration file created");
-        }
-        Database::open(&self.args.config.target).await?;
-        if self.args.verbose {
-            println!("Metadata file created");
-        }
-        if !self.args.quiet {
-            println!("Backup directory {} successfully initialized", String::from(self.args.config.target.to_str().unwrap()))
-        }
-        command::stop(&self.args.config.target).await
+            if self.args.verbose {
+                println!("init command started");
+                println!("Running {}", self.args);
+            }
+            FileSystem::check_home_dir().await?;
+            self.create_directories().await?;
+            self.args.config.write().await?;
+            if self.args.verbose {
+                println!("Configuration file created");
+            }
+            Database::open(&self.args.config.target).await?;
+            if self.args.verbose {
+                println!("Metadata file created");
+            }
+            if !self.args.quiet {
+                println!("Backup directory {} successfully initialized", String::from(self.args.config.target.to_str().unwrap()))
+            }
+            command::stop(&self.args.config.target).await
         })
     }
 }
@@ -89,7 +89,8 @@ impl InitCommand {
     async fn create_directories(&mut self) -> Result<(), CmdError> {
         // target directory must not already contain a burst directory
         let mut target = FileSystem::target_backup_dir(&self.args.config.target);
-        let mut exist = tokio::fs::try_exists(&target).await.map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
+        let mut exist =
+            tokio::fs::try_exists(&target).await.map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
         if exist {
             return Err(CmdError::AlreadyInitialized());
         }

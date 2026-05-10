@@ -54,34 +54,34 @@ impl Command for ListCommand {
 
     fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
         Box::pin(async move {
-        if self.args.verbose {
-            println!("list command started");
-            println!("Running {}", self.args);
-        }
-        match command::start(&self.args.config.target).await {
-            Ok(_) => (),
-            Err(err) => match err {
-                CmdError::NoRemote() => (),
-                _ => return Err(err),
-            },
-        };
-        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
-        let db = Database::open(&self.args.config.target).await?;
-        if let Some(mut snapshot) = Snapshot::get_latest(&db).await? {
-            if !self.args.pattern.is_empty() {
-                self.list_file(&db, snapshot).await?;
-            } else {
-                if self.args.sid == 0 {
-                    self.args.sid = snapshot.id;
-                } else if let Some(s) = Snapshot::get(&db, self.args.sid).await? {
-                    snapshot = s;
-                } else {
-                    return Ok(());
-                }
-                self.list_snapshot(&db, &snapshot).await?;
+            if self.args.verbose {
+                println!("list command started");
+                println!("Running {}", self.args);
             }
-        }
-        command::stop(&self.args.config.target).await
+            match command::start(&self.args.config.target).await {
+                Ok(_) => (),
+                Err(err) => match err {
+                    CmdError::NoRemote() => (),
+                    _ => return Err(err),
+                },
+            };
+            self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+            let db = Database::open(&self.args.config.target).await?;
+            if let Some(mut snapshot) = Snapshot::get_latest(&db).await? {
+                if !self.args.pattern.is_empty() {
+                    self.list_file(&db, snapshot).await?;
+                } else {
+                    if self.args.sid == 0 {
+                        self.args.sid = snapshot.id;
+                    } else if let Some(s) = Snapshot::get(&db, self.args.sid).await? {
+                        snapshot = s;
+                    } else {
+                        return Ok(());
+                    }
+                    self.list_snapshot(&db, &snapshot).await?;
+                }
+            }
+            command::stop(&self.args.config.target).await
         })
     }
 }
