@@ -5,7 +5,8 @@ use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidSour
 use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
 use crate::tools::fs::FileSystem;
-use std::fs;
+use std::future::Future;
+use std::pin::Pin;
 
 pub struct InitCommand {
     args: InitArgs,
@@ -26,11 +27,11 @@ impl From<InitArgs> for InitCommand {
 impl Command for InitCommand {
     fn validate(&mut self) -> Result<(), CmdError> {
         let mut exist =
-            fs::exists(&self.args.config.source).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.source, err)))?;
+            self.args.config.source.try_exists().map_err(|err| CmdError::IoError(IoError::from(&self.args.config.source, err)))?;
         if !exist {
             return Err(InvalidSourceDirectory());
         }
-        exist = fs::exists(&self.args.config.target).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
+        exist = self.args.config.target.try_exists().map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
         if !exist {
             return Err(InvalidBackupDirectory());
         }
@@ -60,44 +61,46 @@ impl Command for InitCommand {
         println!("\tmacOS trash:\t\t\t\t--exclude: \".*/\\.DS_Store$\"");
     }
 
-    fn run(&mut self) -> Result<(), CmdError> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+        Box::pin(async move {
         if self.args.verbose {
             println!("init command started");
             println!("Running {}", self.args);
         }
-        FileSystem::check_home_dir()?;
-        self.create_directories()?;
-        self.args.config.write()?;
+        FileSystem::check_home_dir().await?;
+        self.create_directories().await?;
+        self.args.config.write().await?;
         if self.args.verbose {
             println!("Configuration file created");
         }
-        Database::open(&self.args.config.target)?;
+        Database::open(&self.args.config.target).await?;
         if self.args.verbose {
             println!("Metadata file created");
         }
         if !self.args.quiet {
             println!("Backup directory {} successfully initialized", String::from(self.args.config.target.to_str().unwrap()))
         }
-        command::stop(&self.args.config.target)
+        command::stop(&self.args.config.target).await
+        })
     }
 }
 
 impl InitCommand {
-    fn create_directories(&mut self) -> Result<(), CmdError> {
+    async fn create_directories(&mut self) -> Result<(), CmdError> {
         // target directory must not already contain a burst directory
         let mut target = FileSystem::target_backup_dir(&self.args.config.target);
-        let mut exist = fs::exists(&target).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
+        let mut exist = tokio::fs::try_exists(&target).await.map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
         if exist {
             return Err(CmdError::AlreadyInitialized());
         }
-        fs::create_dir_all(&target).map_err(|err| CmdError::IoError(IoError::from(&target, err)))?;
+        tokio::fs::create_dir_all(&target).await.map_err(|err| CmdError::IoError(IoError::from(&target, err)))?;
         // create local backup directory
         target = FileSystem::home_backup_dir(&self.args.config.target);
-        exist = fs::exists(&target).map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
+        exist = tokio::fs::try_exists(&target).await.map_err(|err| CmdError::IoError(IoError::from(&self.args.config.target, err)))?;
         if exist {
             return Err(CmdError::AlreadyInitialized());
         }
-        fs::create_dir_all(&target).map_err(|err| CmdError::IoError(IoError::from(&target, err)))?;
+        tokio::fs::create_dir_all(&target).await.map_err(|err| CmdError::IoError(IoError::from(&target, err)))?;
         Ok(())
     }
 }

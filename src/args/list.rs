@@ -44,7 +44,7 @@ impl fmt::Display for ListArgs {
 }
 
 impl ListArgs {
-    pub fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
         if args.len() < MIN_PARAMS {
             return Err(CmdError::InvalidParameters);
         }
@@ -83,7 +83,7 @@ impl ListArgs {
             n += 1
         }
         if !args[args.len() - 1].starts_with("--") {
-            match FileSystem::canonicalize(&args[args.len() - 1]) {
+            match FileSystem::canonicalize(&args[args.len() - 1]).await {
                 Ok(target) => params.config.target = target,
                 Err(_) => return Err(CmdError::InvalidBackupDirectory()),
             }

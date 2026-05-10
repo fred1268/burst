@@ -12,17 +12,18 @@ use crate::cmds::verify::VerifyCommand;
 use crate::tools::cmderror::CmdError::{self, NoRemote};
 use crate::tools::cmderror::IoError;
 use crate::tools::fs::FileSystem;
-use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 pub trait Command {
     fn validate(&mut self) -> Result<(), CmdError>;
     fn help(&self);
-    fn run(&mut self) -> Result<(), CmdError>;
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>>;
 }
 
-pub fn get_command(args: &[String]) -> Result<Box<dyn Command>, CmdError> {
-    let cmd_args = Args::from_args(args)?;
+pub async fn get_command(args: &[String]) -> Result<Box<dyn Command>, CmdError> {
+    let cmd_args = Args::from_args(args).await?;
     match cmd_args {
         Args::Help(args) => Ok(Box::new(HelpCommand::from(args))),
         Args::Init(args) => Ok(Box::new(InitCommand::from(args))),
@@ -40,10 +41,10 @@ pub fn config_file(target: &Path) -> PathBuf {
     FileSystem::home_backup_dir(target).join(BURST_CONFIG_FILE)
 }
 
-pub fn start(target: &Path) -> Result<(), CmdError> {
+pub async fn start(target: &Path) -> Result<(), CmdError> {
     let home_dir = FileSystem::home_backup_dir(target);
     let target_dir = target.join(BURST_DIRECTORY);
-    let mut exist = fs::exists(&home_dir).map_err(|err| CmdError::IoError(IoError::from(&home_dir, err)))?;
+    let mut exist = tokio::fs::try_exists(&home_dir).await.map_err(|err| CmdError::IoError(IoError::from(&home_dir, err)))?;
     if !exist {
         return Err(CmdError::InvalidBackupDirectory());
     }
@@ -52,27 +53,27 @@ pub fn start(target: &Path) -> Result<(), CmdError> {
     let local_db = home_dir.join(BURST_METADATA_FILE);
     let remote_cfg = target_dir.join(BURST_CONFIG_FILE);
     let remote_db = target_dir.join(BURST_METADATA_FILE);
-    exist = fs::exists(&remote_cfg).map_err(|err| CmdError::IoError(IoError::from(&remote_cfg, err)))?;
+    exist = tokio::fs::try_exists(&remote_cfg).await.map_err(|err| CmdError::IoError(IoError::from(&remote_cfg, err)))?;
     if !exist {
         return Err(NoRemote());
     }
-    exist = fs::exists(&remote_db).map_err(|err| CmdError::IoError(IoError::from(&remote_db, err)))?;
+    exist = tokio::fs::try_exists(&remote_db).await.map_err(|err| CmdError::IoError(IoError::from(&remote_db, err)))?;
     if !exist {
         return Err(NoRemote());
     }
 
-    exist = fs::exists(&local_cfg).map_err(|err| CmdError::IoError(IoError::from(&local_cfg, err)))?;
+    exist = tokio::fs::try_exists(&local_cfg).await.map_err(|err| CmdError::IoError(IoError::from(&local_cfg, err)))?;
     if !exist {
-        fs::copy(&remote_cfg, &local_cfg).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
+        tokio::fs::copy(&remote_cfg, &local_cfg).await.map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
     }
-    exist = fs::exists(&local_db).map_err(|err| CmdError::IoError(IoError::from(&local_db, err)))?;
+    exist = tokio::fs::try_exists(&local_db).await.map_err(|err| CmdError::IoError(IoError::from(&local_db, err)))?;
     if !exist {
-        fs::copy(&remote_db, &local_db).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy metadata", err)))?;
+        tokio::fs::copy(&remote_db, &local_db).await.map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy metadata", err)))?;
     }
     Ok(())
 }
 
-pub fn stop(target: &Path) -> Result<(), CmdError> {
+pub async fn stop(target: &Path) -> Result<(), CmdError> {
     let home_dir = FileSystem::home_backup_dir(target);
     let target_dir = target.join(BURST_DIRECTORY);
 
@@ -80,12 +81,12 @@ pub fn stop(target: &Path) -> Result<(), CmdError> {
     let local_db = home_dir.join(BURST_METADATA_FILE);
     let remote_cfg = target_dir.join(BURST_CONFIG_FILE);
     let remote_db = target_dir.join(BURST_METADATA_FILE);
-    let exist = fs::exists(&target_dir).map_err(|err| CmdError::IoError(IoError::from(&target_dir, err)))?;
+    let exist = tokio::fs::try_exists(&target_dir).await.map_err(|err| CmdError::IoError(IoError::from(&target_dir, err)))?;
     if !exist {
         return Ok(());
     }
 
-    fs::copy(&local_cfg, &remote_cfg).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
-    fs::copy(&local_db, &remote_db).map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy metadata", err)))?;
+    tokio::fs::copy(&local_cfg, &remote_cfg).await.map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy configuration", err)))?;
+    tokio::fs::copy(&local_db, &remote_db).await.map_err(|err| CmdError::IoError(IoError::from_str("Cannot copy metadata", err)))?;
     Ok(())
 }

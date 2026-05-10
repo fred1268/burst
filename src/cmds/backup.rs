@@ -69,13 +69,14 @@ impl Command for BackupCommand {
         println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
     }
 
-    fn run(&mut self) -> Result<(), CmdError> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+        Box::pin(async move {
         let start = Instant::now();
         if self.args.verbose {
             println!("backup command started");
             println!("Running {}", self.args);
         }
-        match command::start(&self.args.config.target) {
+        match command::start(&self.args.config.target).await {
             Ok(_) => (),
             Err(err) => match err {
                 CmdError::NoRemote() => {
@@ -86,180 +87,183 @@ impl Command for BackupCommand {
                 _ => return Err(err),
             },
         };
-        self.args.config.read(&command::config_file(&self.args.config.target))?;
-        let db = Database::open(&self.args.config.target)?;
+        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+        let db = Database::open(&self.args.config.target).await?;
         let mut snapshot = match self.args.dry_run {
             true => Some(Snapshot::default()),
             false => match self.args.cont {
                 true => {
-                    let inprogress = Snapshot::get_in_progress(&db)?;
+                    let inprogress = Snapshot::get_in_progress(&db).await?;
                     if inprogress.is_none() {
                         return Err(InvalidOption(String::from("Cannot use --continue when no backup has been interrupted")));
                     }
                     inprogress
                 }
                 false => {
-                    if let Some(snapshot_ip) = Snapshot::get_in_progress(&db)? {
+                    if let Some(snapshot_ip) = Snapshot::get_in_progress(&db).await? {
                         return Err(InvalidOption(format!("A previous backup has been interrupted: use --continue to resume it.\nAlternatively, use the 'delete --snapshot {}' command to remove it", snapshot_ip.id)));
                     }
-                    Snapshot::insert_next(&db)?
+                    Snapshot::insert_next(&db).await?
                 }
             },
         }
         .unwrap_or_default();
         if self.args.dry_run {
-            if let Some(ps) = Snapshot::get_latest(&db)? {
+            if let Some(ps) = Snapshot::get_latest(&db).await? {
                 self.previous_snapshot = ps;
             }
-        } else if let Some(ps) = Snapshot::get_previous(&db, snapshot.id)? {
+        } else if let Some(ps) = Snapshot::get_previous(&db, snapshot.id).await? {
             self.previous_snapshot = ps;
         }
 
         if self.args.parallel {
-            self.async_do_backup(&db, &mut snapshot)?;
+            self.async_do_backup(&db, &mut snapshot).await?;
         } else {
-            self.sync_do_backup(&db, &mut snapshot)?;
+            self.sync_do_backup(&db, &mut snapshot).await?;
         }
 
         if !self.args.dry_run && !self.args.config.incremental {
-            File::delete_all(&db, self.previous_snapshot.id)?;
-            self.previous_snapshot.delete(&db)?;
+            File::delete_all(&db, self.previous_snapshot.id).await?;
+            self.previous_snapshot.delete(&db).await?;
         }
         snapshot.duration = start.elapsed();
         snapshot.status = String::from("success");
         if !self.args.dry_run {
-            snapshot.mark_completed(&db)?;
+            snapshot.mark_completed(&db).await?;
         }
         if !self.args.config.incremental {
-            File::insert_history_sync_mode(&db, snapshot.id)?;
+            File::insert_history_sync_mode(&db, snapshot.id).await?;
         }
         if !self.args.quiet {
             println!();
             Snapshot::header();
             println!("{}", snapshot);
         }
-        command::stop(&self.args.config.target)
+        command::stop(&self.args.config.target).await
+        })
     }
 }
 
 impl BackupCommand {
-    fn sync_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
+    async fn sync_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
-        if !self.process_directory(db, &fs, snapshot, &self.args.config.source)? && !self.args.quiet {
+        if !self.process_directory(db, &fs, snapshot, &self.args.config.source).await? && !self.args.quiet {
             println!("Warning: backup is empty");
         }
         Ok(())
     }
 
-    fn process_directory(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, root: &Path) -> Result<bool, CmdError> {
-        snapshot.dirs += 1;
-        if !self.args.quiet && self.previous_snapshot.id == 0 {
-            println!("Directory {:?}", root);
-        }
-        let mut previous_children = File::children_dirs(
-            db,
-            self.previous_snapshot.id,
-            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
-        )?;
-        let mut children: Vec<PathBuf> = vec![];
-        let mut files: Vec<File> = vec![];
-        let entries = fs::read_dir(root).map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
-        let mut contains_files = false;
-        for entry in entries {
-            let entry = entry.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))?;
-            let p = entry.path();
-            let metadata = fs::symlink_metadata(&p).map_err(|err| CmdError::IoError(IoError::from(&p, err)))?;
-            if !self.args.config.follow_symlinks && metadata.is_symlink() {
-                if self.args.verbose {
-                    println!("  Excluded symlink {:?}", entry.file_name())
-                }
-                continue;
+    fn process_directory<'a>(&'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, root: &'a Path) -> Pin<Box<dyn Future<Output = Result<bool, CmdError>> + 'a>> {
+        Box::pin(async move {
+            snapshot.dirs += 1;
+            if !self.args.quiet && self.previous_snapshot.id == 0 {
+                println!("Directory {:?}", root);
             }
-            if self.args.config.is_excluded(&p) {
-                if metadata.is_dir() {
-                    snapshot.excluded_dirs += 1;
+            let mut previous_children = File::children_dirs(
+                db,
+                self.previous_snapshot.id,
+                root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
+            ).await?;
+            let mut children: Vec<PathBuf> = vec![];
+            let mut files: Vec<File> = vec![];
+            let entries = fs::read_dir(root).map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
+            let mut contains_files = false;
+            for entry in entries {
+                let entry = entry.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))?;
+                let p = entry.path();
+                let metadata = fs::symlink_metadata(&p).map_err(|err| CmdError::IoError(IoError::from(&p, err)))?;
+                if !self.args.config.follow_symlinks && metadata.is_symlink() {
                     if self.args.verbose {
-                        println!("Excluded directory {:?}", p)
+                        println!("  Excluded symlink {:?}", entry.file_name())
+                    }
+                    continue;
+                }
+                if self.args.config.is_excluded(&p) {
+                    if metadata.is_dir() {
+                        snapshot.excluded_dirs += 1;
+                        if self.args.verbose {
+                            println!("Excluded directory {:?}", p)
+                        }
+                    } else {
+                        snapshot.excluded_files += 1;
+                        if self.args.verbose {
+                            println!("  Excluded file {:?}", p.file_name().unwrap())
+                        }
+                    }
+                    continue;
+                }
+                if p.is_dir() {
+                    let name = PathBuf::from(
+                        p.strip_prefix(&self.args.config.source)
+                            .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
+                    );
+                    if previous_children.contains_key(&name) {
+                        previous_children.remove(&name).unwrap();
+                    }
+                    children.push(p);
+                    continue;
+                }
+                contains_files = true;
+                files.push(File::from_metadata(
+                    p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
+                    metadata,
+                ));
+            }
+            for (_, mut child) in previous_children {
+                self.process_deleted_dir(db, fs, snapshot, &mut child).await?;
+            }
+            self.process_files(
+                db,
+                fs,
+                snapshot,
+                root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
+                files,
+            ).await?;
+            let mut n = children.len();
+            for child in &children {
+                if self.process_directory(db, fs, snapshot, child).await? {
+                    let name = child
+                        .strip_prefix(&self.args.config.source)
+                        .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", child)))?;
+                    match File::find_entry(db, name).await? {
+                        Some(dir) => {
+                            if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot.id).await?) {
+                                dir.insert_ref(db, snapshot.id).await?;
+                            }
+                        }
+                        None => {
+                            let metadata = fs::symlink_metadata(child).map_err(|err| CmdError::IoError(IoError::from(child, err)))?;
+                            let dir = &mut File::from_metadata(name, metadata);
+                            if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot.id).await?) {
+                                dir.insert(db, snapshot.id).await?;
+                            }
+                        }
                     }
                 } else {
-                    snapshot.excluded_files += 1;
-                    if self.args.verbose {
-                        println!("  Excluded file {:?}", p.file_name().unwrap())
-                    }
+                    n -= 1;
                 }
-                continue;
             }
-            if p.is_dir() {
-                let name = PathBuf::from(
-                    p.strip_prefix(&self.args.config.source)
-                        .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
-                );
-                if previous_children.contains_key(&name) {
-                    previous_children.remove(&name).unwrap();
-                }
-                children.push(p);
-                continue;
-            }
-            contains_files = true;
-            files.push(File::from_metadata(
-                p.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
-                metadata,
-            ));
-        }
-        for (_, mut child) in previous_children {
-            self.process_deleted_dir(db, fs, snapshot, &mut child)?;
-        }
-        self.process_files(
-            db,
-            fs,
-            snapshot,
-            root.strip_prefix(&self.args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
-            files,
-        )?;
-        let mut n = children.len();
-        for child in &children {
-            if self.process_directory(db, fs, snapshot, child)? {
-                let name = child
-                    .strip_prefix(&self.args.config.source)
-                    .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", child)))?;
-                match File::find_entry(db, name)? {
-                    Some(dir) => {
-                        if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot.id)?) {
-                            dir.insert_ref(db, snapshot.id)?;
-                        }
-                    }
-                    None => {
-                        let metadata = fs::symlink_metadata(child).map_err(|err| CmdError::IoError(IoError::from(child, err)))?;
-                        let dir = &mut File::from_metadata(name, metadata);
-                        if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot.id)?) {
-                            dir.insert(db, snapshot.id)?;
-                        }
-                    }
-                }
-            } else {
-                n -= 1;
-            }
-        }
-        Ok(contains_files || n != 0)
+            Ok(contains_files || n != 0)
+        })
     }
 
-    fn process_files(&self, db: &Database, fs: &FileSystem, stats: &mut Snapshot, dir: &Path, files: Vec<File>) -> Result<(), CmdError> {
-        let mut previous_files = File::children_files(db, self.previous_snapshot.id, dir)?;
+    async fn process_files(&self, db: &Database, fs: &FileSystem, stats: &mut Snapshot, dir: &Path, files: Vec<File>) -> Result<(), CmdError> {
+        let mut previous_files = File::children_files(db, self.previous_snapshot.id, dir).await?;
         for mut file in files {
             if let Some(previous_file) = previous_files.get_mut(&file.fullname()) {
-                self.process_existing_file(db, fs, stats, previous_file, &mut file)?;
+                self.process_existing_file(db, fs, stats, previous_file, &mut file).await?;
                 previous_files.remove(&file.fullname());
                 continue;
             }
-            self.process_new_file(db, fs, stats, &mut file)?;
+            self.process_new_file(db, fs, stats, &mut file).await?;
         }
         for mut file in previous_files.into_values() {
-            self.process_deleted_file(db, fs, stats, &mut file)?;
+            self.process_deleted_file(db, fs, stats, &mut file).await?;
         }
         Ok(())
     }
 
-    fn process_new_file(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, file: &mut File) -> Result<(), CmdError> {
+    async fn process_new_file(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, file: &mut File) -> Result<(), CmdError> {
         snapshot.count += 1;
         snapshot.size += file.size;
         snapshot.new_count += 1;
@@ -267,13 +271,13 @@ impl BackupCommand {
         if self.args.verbose || self.previous_snapshot.id != 0 {
             println!("  New file {:?}", file.fullname())
         }
-        if !self.args.dry_run && (!self.args.cont || !file.exists(db, snapshot.id)?) {
-            self.insert_new_file(db, fs, snapshot, file)?;
+        if !self.args.dry_run && (!self.args.cont || !file.exists(db, snapshot.id).await?) {
+            self.insert_new_file(db, fs, snapshot, file).await?;
         }
         Ok(())
     }
 
-    fn process_existing_file(
+    async fn process_existing_file(
         &self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, previous_file: &mut File, file: &mut File,
     ) -> Result<(), CmdError> {
         snapshot.count += 1;
@@ -286,26 +290,26 @@ impl BackupCommand {
             }
             if !self.args.dry_run {
                 if self.args.config.is_incremental(&file.fullname()) {
-                    if !self.args.cont || !file.exists(db, snapshot.id)? {
-                        self.archive_file(db, fs, snapshot, previous_file)?;
-                        self.insert_new_file(db, fs, snapshot, file)?;
+                    if !self.args.cont || !file.exists(db, snapshot.id).await? {
+                        self.archive_file(db, fs, snapshot, previous_file).await?;
+                        self.insert_new_file(db, fs, snapshot, file).await?;
                     }
-                } else if !self.args.cont || !file.exists(db, snapshot.id)? {
-                    self.insert_new_file(db, fs, snapshot, file)?;
-                    self.remove_previous_file(db, fs, previous_file, file)?;
+                } else if !self.args.cont || !file.exists(db, snapshot.id).await? {
+                    self.insert_new_file(db, fs, snapshot, file).await?;
+                    self.remove_previous_file(db, fs, previous_file, file).await?;
                 }
             }
         } else {
             snapshot.unchanged_count += 1;
             snapshot.unchanged_size += file.size;
-            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, snapshot.id)?) {
-                self.insert_unchanged_file(db, fs, snapshot, previous_file)?;
+            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, snapshot.id).await?) {
+                self.insert_unchanged_file(db, fs, snapshot, previous_file).await?;
             }
         }
         Ok(())
     }
 
-    fn process_deleted_file(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, file: &mut File) -> Result<(), CmdError> {
+    async fn process_deleted_file(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, file: &mut File) -> Result<(), CmdError> {
         snapshot.count += 1;
         snapshot.size += file.size;
         snapshot.deleted_count += 1;
@@ -316,38 +320,40 @@ impl BackupCommand {
         }
         if !self.args.dry_run {
             if self.args.config.is_incremental(&file.fullname()) {
-                if !self.args.cont || !file.archive_exists(db, snapshot.id)? || !fs.exists(file, &self.args.config.target) {
-                    self.archive_file(db, fs, snapshot, file)?;
+                if !self.args.cont || !file.archive_exists(db, snapshot.id).await? || !fs.exists(file, &self.args.config.target).await? {
+                    self.archive_file(db, fs, snapshot, file).await?;
                 }
-            } else if !self.args.cont || file.exists(db, snapshot.id)? {
-                self.remove_file(db, fs, file)?;
+            } else if !self.args.cont || file.exists(db, snapshot.id).await? {
+                self.remove_file(db, fs, file).await?;
             }
         }
         Ok(())
     }
 
-    fn process_deleted_dir(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, dir: &mut File) -> Result<(), CmdError> {
-        if self.args.verbose || self.previous_snapshot.id != 0 {
-            println!("Deleted dir {:?}", dir.fullname())
-        }
-        let files = File::children_files(db, self.previous_snapshot.id, &dir.fullname())?;
-        for (_, mut file) in files {
-            self.process_deleted_file(db, fs, snapshot, &mut file)?;
-        }
-        let dirs = File::children_dirs(db, self.previous_snapshot.id, &dir.fullname())?;
-        for (_, mut dir) in dirs {
-            self.process_deleted_dir(db, fs, snapshot, &mut dir)?;
-        }
-        if !self.args.dry_run {
-            if self.args.config.is_incremental(&dir.fullname()) {
-                if !self.args.cont || !dir.archive_exists(db, snapshot.id)? {
-                    self.archive_dir(db, fs, snapshot, dir)?;
-                }
-            } else if !self.args.cont || dir.exists(db, snapshot.id)? {
-                self.remove_dir(db, fs, dir)?;
+    fn process_deleted_dir<'a>(&'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, dir: &'a mut File) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + 'a>> {
+        Box::pin(async move {
+            if self.args.verbose || self.previous_snapshot.id != 0 {
+                println!("Deleted dir {:?}", dir.fullname())
             }
-        }
-        Ok(())
+            let files = File::children_files(db, self.previous_snapshot.id, &dir.fullname()).await?;
+            for (_, mut file) in files {
+                self.process_deleted_file(db, fs, snapshot, &mut file).await?;
+            }
+            let dirs = File::children_dirs(db, self.previous_snapshot.id, &dir.fullname()).await?;
+            for (_, mut child) in dirs {
+                self.process_deleted_dir(db, fs, snapshot, &mut child).await?;
+            }
+            if !self.args.dry_run {
+                if self.args.config.is_incremental(&dir.fullname()) {
+                    if !self.args.cont || !dir.archive_exists(db, snapshot.id).await? {
+                        self.archive_dir(db, fs, snapshot, dir).await?;
+                    }
+                } else if !self.args.cont || dir.exists(db, snapshot.id).await? {
+                    self.remove_dir(db, fs, dir).await?;
+                }
+            }
+            Ok(())
+        })
     }
 
     // Operation order and failure analysis (--continue recovery):
@@ -372,52 +378,51 @@ impl BackupCommand {
     // case (rename failed after DB update) is recovered by --continue via an extra fs.exists() check
     // in process_deleted_file: archive_exists()=true but fs.exists()=false → retries the rename.
 
-    fn insert_new_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
-        file.digest = fs.compute_digest(file, &self.args.config.source)?;
-        fs.copy_new_file(file, self.args.config.hash_comparison)?;
-        file.insert(db, snapshot.id)
+    async fn insert_new_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
+        file.digest = fs.compute_digest(file, &self.args.config.source).await?;
+        fs.copy_new_file(file, self.args.config.hash_comparison).await?;
+        file.insert(db, snapshot.id).await
     }
 
-    fn insert_unchanged_file(&self, db: &Database, _fs: &FileSystem, snapshot: &Snapshot, file: &File) -> Result<(), CmdError> {
-        file.insert_ref(db, snapshot.id)
+    async fn insert_unchanged_file(&self, db: &Database, _fs: &FileSystem, snapshot: &Snapshot, file: &File) -> Result<(), CmdError> {
+        file.insert_ref(db, snapshot.id).await
     }
 
-    fn archive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
-        file.archive(db, snapshot.id)?;
-        fs.archive_file(snapshot.id, file)
+    async fn archive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
+        file.archive(db, snapshot.id).await?;
+        fs.archive_file(snapshot.id, file).await
     }
 
-    fn archive_dir(&self, db: &Database, _fs: &FileSystem, snapshot: &Snapshot, dir: &mut File) -> Result<(), CmdError> {
-        dir.archive(db, snapshot.id)
+    async fn archive_dir(&self, db: &Database, _fs: &FileSystem, snapshot: &Snapshot, dir: &mut File) -> Result<(), CmdError> {
+        dir.archive(db, snapshot.id).await
     }
 
-    fn remove_previous_file(&self, db: &Database, _fs: &FileSystem, previous_file: &File, file: &File) -> Result<(), CmdError> {
-        previous_file.update_ref(db, file)?;
-        previous_file.delete(db)
+    async fn remove_previous_file(&self, db: &Database, _fs: &FileSystem, previous_file: &File, file: &File) -> Result<(), CmdError> {
+        previous_file.update_ref(db, file).await?;
+        previous_file.delete(db).await
     }
 
-    fn remove_file(&self, db: &Database, fs: &FileSystem, file: &File) -> Result<(), CmdError> {
-        file.delete_ref(db)?;
-        file.delete(db)?;
-        fs.remove_file(file)
+    async fn remove_file(&self, db: &Database, fs: &FileSystem, file: &File) -> Result<(), CmdError> {
+        file.delete_ref(db).await?;
+        file.delete(db).await?;
+        fs.remove_file(file).await
     }
 
-    fn remove_dir(&self, db: &Database, fs: &FileSystem, dir: &File) -> Result<(), CmdError> {
-        dir.delete_ref(db)?;
-        dir.delete(db)?;
-        fs.remove_dir(dir)
+    async fn remove_dir(&self, db: &Database, fs: &FileSystem, dir: &File) -> Result<(), CmdError> {
+        dir.delete_ref(db).await?;
+        dir.delete(db).await?;
+        fs.remove_dir(dir).await
     }
 
-    fn async_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
-        let rt = tokio::runtime::Runtime::new().map_err(|e| CmdError::GenericError(e.to_string()))?;
+    async fn async_do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
         let (dir, statistics) =
-            rt.block_on(Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()))?;
+            Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()).await?;
         if !statistics.has_files && !self.args.quiet {
             println!("Warning: backup is empty");
         }
         snapshot.excluded_dirs = statistics.dirs;
         snapshot.excluded_files = statistics.files;
-        let prev_dir = self.read_previous_source(db)?;
+        let prev_dir = self.read_previous_source(db).await?;
         let _todo = self.compare_tree(dir, prev_dir);
         Ok(())
     }
@@ -506,8 +511,8 @@ impl BackupCommand {
         Directory { name: path, files, children }
     }
 
-    fn read_previous_source(&self, db: &Database) -> Result<Directory, CmdError> {
-        let entries = File::all_entries(db, self.previous_snapshot.id)?;
+    async fn read_previous_source(&self, db: &Database) -> Result<Directory, CmdError> {
+        let entries = File::all_entries(db, self.previous_snapshot.id).await?;
         let mut by_path: HashMap<PathBuf, Vec<File>> = HashMap::new();
         for entry in entries {
             by_path.entry(entry.path.clone()).or_default().push(entry);

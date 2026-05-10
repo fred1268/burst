@@ -50,7 +50,7 @@ impl fmt::Display for RestoreArgs {
 }
 
 impl RestoreArgs {
-    pub fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
         if args.len() < MIN_PARAMS {
             return Err(CmdError::InvalidParameters);
         }
@@ -84,13 +84,13 @@ impl RestoreArgs {
             n += 1
         }
         if !args[args.len() - 2].starts_with("--") {
-            match FileSystem::canonicalize(&args[args.len() - 2]) {
+            match FileSystem::canonicalize(&args[args.len() - 2]).await {
                 Ok(target) => params.config.target = target,
                 Err(_) => return Err(CmdError::InvalidBackupDirectory()),
             }
         }
         if !args[args.len() - 1].starts_with("--") {
-            match FileSystem::canonicalize(&args[args.len() - 1]) {
+            match FileSystem::canonicalize(&args[args.len() - 1]).await {
                 Ok(to) => params.to = to,
                 Err(_) => return Err(CmdError::InvalidRestoreDirectory()),
             }

@@ -2,9 +2,10 @@ use crate::cmds::constants::BURST_DIRECTORY;
 use crate::cmds::file::File;
 use crate::tools::cmderror::{CmdError, IoError};
 use sha2::{Digest, Sha256};
-use std::io::{BufReader, ErrorKind, Read};
+use std::env;
+use std::io::ErrorKind;
 use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR, Path, PathBuf};
-use std::{env, fs};
+use tokio::io::AsyncReadExt;
 
 const BUF_SIZE: usize = 65536;
 
@@ -30,14 +31,14 @@ impl FileSystem {
         target.join(BURST_DIRECTORY)
     }
 
-    pub fn canonicalize(path: &str) -> Result<PathBuf, CmdError> {
+    pub async fn canonicalize(path: &str) -> Result<PathBuf, CmdError> {
         let dir = match path.ends_with(MAIN_SEPARATOR) {
             true => PathBuf::from(path.strip_suffix(MAIN_SEPARATOR).unwrap()),
             false => PathBuf::from(path),
         };
-        let exist = fs::exists(&dir).map_err(|err| CmdError::IoError(IoError::from_str(path, err)))?;
+        let exist = tokio::fs::try_exists(&dir).await.map_err(|err| CmdError::IoError(IoError::from_str(path, err)))?;
         if exist {
-            return dir.canonicalize().map_err(|err| CmdError::IoError(IoError::from(&dir, err)));
+            return tokio::fs::canonicalize(&dir).await.map_err(|err| CmdError::IoError(IoError::from(&dir, err)));
         }
         if path.ends_with(MAIN_SEPARATOR) {
             return Ok(PathBuf::from(path.strip_suffix(MAIN_SEPARATOR).unwrap()));
@@ -56,13 +57,13 @@ impl FileSystem {
         PathBuf::from(str)
     }
 
-    pub fn check_home_dir() -> Result<(), CmdError> {
+    pub async fn check_home_dir() -> Result<(), CmdError> {
         let home = Self::home_dir();
-        let exist = fs::exists(&home).map_err(|err| CmdError::IoError(IoError::from(&home, err)))?;
+        let exist = tokio::fs::try_exists(&home).await.map_err(|err| CmdError::IoError(IoError::from(&home, err)))?;
         if exist {
             return Ok(());
         }
-        fs::create_dir_all(&home).map_err(|err| CmdError::IoError(IoError::from(&home, err)))
+        tokio::fs::create_dir_all(&home).await.map_err(|err| CmdError::IoError(IoError::from(&home, err)))
     }
 
     fn other_os_separator() -> char {
@@ -73,19 +74,20 @@ impl FileSystem {
         }
     }
 
-    pub fn copy_new_file(&self, file: &mut File, compare_hash: bool) -> Result<(), CmdError> {
+    pub async fn copy_new_file(&self, file: &mut File, compare_hash: bool) -> Result<(), CmdError> {
         let to = file.archive_dir(&self.target);
-        if !to.exists() {
-            fs::create_dir_all(&to).map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
+        if !tokio::fs::try_exists(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))? {
+            tokio::fs::create_dir_all(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
         }
-        fs::copy(file.source_name(&self.source), to.join(&file.name)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
+        tokio::fs::copy(file.source_name(&self.source), to.join(&file.name)).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         if compare_hash {
-            let digest = self.compute_digest(file, &self.target)?;
+            let digest = self.compute_digest(file, &self.target).await?;
             if digest != file.digest {
                 println!("Warning: hash comparison failed for {:?}. Retrying", file.fullname());
-                fs::copy(file.source_name(&self.source), to.join(&file.name))
+                tokio::fs::copy(file.source_name(&self.source), to.join(&file.name))
+                    .await
                     .map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
-                let hash = self.compute_digest(file, &self.target)?;
+                let hash = self.compute_digest(file, &self.target).await?;
                 if hash != file.digest {
                     println!("Error: hash comparison failed for {:?}", file.fullname());
                 }
@@ -94,13 +96,12 @@ impl FileSystem {
         Ok(())
     }
 
-    pub fn compute_digest(&self, file: &File, path: &Path) -> Result<String, CmdError> {
+    pub async fn compute_digest(&self, file: &File, path: &Path) -> Result<String, CmdError> {
         let mut hasher = Sha256::new();
-        let f = fs::File::open(file.source_name(path)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
-        let mut reader = BufReader::new(f);
+        let mut f = tokio::fs::File::open(file.source_name(path)).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         let mut buffer: [u8; BUF_SIZE] = [0u8; BUF_SIZE];
         loop {
-            let read = reader.read(&mut buffer[..]).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
+            let read = f.read(&mut buffer[..]).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
             hasher.update(&buffer[0..read]);
             if read < BUF_SIZE {
                 break;
@@ -110,66 +111,67 @@ impl FileSystem {
         Ok(format!("{:x}", result))
     }
 
-    pub fn archive_file(&self, _sid: u64, file: &File) -> Result<(), CmdError> {
+    pub async fn archive_file(&self, _sid: u64, file: &File) -> Result<(), CmdError> {
         let to: PathBuf = file.archive_dir(&self.target);
-        if !to.exists() {
-            fs::create_dir_all(&to).map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
+        if !tokio::fs::try_exists(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))? {
+            tokio::fs::create_dir_all(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
         }
-        fs::rename(file.source_name(&self.target), to.join(&file.name)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))
+        tokio::fs::rename(file.source_name(&self.target), to.join(&file.name)).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))
     }
 
-    pub fn unarchive_file(&self, _sid: u64, file: &File) -> Result<(), CmdError> {
-        fs::rename(file.archive_name(&self.target), file.source_name(&self.target))
+    pub async fn unarchive_file(&self, _sid: u64, file: &File) -> Result<(), CmdError> {
+        tokio::fs::rename(file.archive_name(&self.target), file.source_name(&self.target))
+            .await
             .map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         if let Some(parent) = file.archive_name(&self.target).parent() {
-            self.recurse_remove_empty_dir(parent)?;
+            self.recurse_remove_empty_dir(parent).await?;
         }
         Ok(())
     }
 
-    pub fn remove_file(&self, file: &File) -> Result<(), CmdError> {
+    pub async fn remove_file(&self, file: &File) -> Result<(), CmdError> {
         match file.is_dir {
-            true => self.remove_dir(file),
+            true => self.remove_dir(file).await,
             false => {
-                fs::remove_file(file.archive_name(&self.target)).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
+                tokio::fs::remove_file(file.archive_name(&self.target)).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
                 if let Some(parent) = file.archive_name(&self.target).parent() {
-                    self.recurse_remove_empty_dir(parent)?;
+                    self.recurse_remove_empty_dir(parent).await?;
                 }
                 Ok(())
             }
         }
     }
 
-    pub fn remove_dir(&self, dir: &File) -> Result<(), CmdError> {
-        self.recurse_remove_empty_dir(&dir.archive_name(&self.target))
+    pub async fn remove_dir(&self, dir: &File) -> Result<(), CmdError> {
+        self.recurse_remove_empty_dir(&dir.archive_name(&self.target)).await
     }
 
-    pub fn remove_archive_dir(&self, dir: &File) -> Result<(), CmdError> {
-        self.recurse_remove_empty_dir(&dir.archive_name(&self.target))
+    pub async fn remove_archive_dir(&self, dir: &File) -> Result<(), CmdError> {
+        self.recurse_remove_empty_dir(&dir.archive_name(&self.target)).await
     }
 
-    pub fn restore_file(&self, file: &File, to_dir: &Path, flatten: bool, overwrite: bool) -> Result<bool, CmdError> {
+    pub async fn restore_file(&self, file: &File, to_dir: &Path, flatten: bool, overwrite: bool) -> Result<bool, CmdError> {
         let to = match flatten {
             true => to_dir.join(&file.name),
             false => {
                 let to = to_dir.join(&file.path);
-                if !to.exists() {
-                    fs::create_dir_all(&to).map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
+                if !tokio::fs::try_exists(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))? {
+                    tokio::fs::create_dir_all(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
                 }
                 to.join(&file.name)
             }
         };
-        let conflict = to.exists() && !overwrite;
+        let conflict = tokio::fs::try_exists(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))? && !overwrite;
         if !conflict {
-            fs::copy(file.archive_name(&self.target), &to).map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
+            tokio::fs::copy(file.archive_name(&self.target), &to).await.map_err(|err| CmdError::IoError(IoError::from(&file.name, err)))?;
         }
         Ok(conflict)
     }
 
-    fn recurse_remove_empty_dir(&self, path: &Path) -> Result<(), CmdError> {
+    async fn recurse_remove_empty_dir(&self, path: &Path) -> Result<(), CmdError> {
         let mut dir = path;
         loop {
-            match fs::remove_dir(dir) {
+            match tokio::fs::remove_dir(dir).await {
                 Ok(_) => match dir.parent() {
                     Some(parent) => dir = parent,
                     None => break,
@@ -183,12 +185,9 @@ impl FileSystem {
         Ok(())
     }
 
-    pub fn exists(&self, file: &File, path: &Path) -> bool {
+    pub async fn exists(&self, file: &File, path: &Path) -> Result<bool, CmdError> {
         let str = String::from(file.archive_name(path).to_str().unwrap());
         let str2 = str.replace(Self::other_os_separator(), MAIN_SEPARATOR_STR);
-        if let Ok(exists) = fs::exists(str2) {
-            return exists;
-        }
-        false
+        tokio::fs::try_exists(str2).await.map_err(|err| CmdError::IoError(IoError::from_str(&str, err)))
     }
 }

@@ -9,6 +9,8 @@ use crate::cmds::list::ListCommand;
 use crate::cmds::restore::RestoreCommand;
 use crate::cmds::verify::VerifyCommand;
 use crate::tools::cmderror::CmdError;
+use std::future::Future;
+use std::pin::Pin;
 
 pub struct HelpCommand {
     args: HelpArgs,
@@ -45,7 +47,8 @@ impl Command for HelpCommand {
         println!("\tverify\t\tVerifies backup integrity and files consistency");
     }
 
-    fn run(&mut self) -> Result<(), CmdError> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+        Box::pin(async move {
         match self.args.command.as_str() {
             "" => self.help(),
             "init" => {
@@ -83,6 +86,7 @@ impl Command for HelpCommand {
             _ => (),
         }
         Ok(())
+        })
     }
 }
 

@@ -2,11 +2,12 @@ use burst::cmds::{command, help::HelpCommand};
 use burst::tools::cmderror::CmdError::MissingCommand;
 use std::{env, process::exit};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = env::args().collect();
-    match command::get_command(&args) {
+    match command::get_command(&args).await {
         Ok(mut c) => match c.validate() {
-            Ok(_) => match c.run() {
+            Ok(_) => match c.run().await {
                 Ok(_) => (),
                 Err(err) => {
                     eprintln!("{}\n", err);

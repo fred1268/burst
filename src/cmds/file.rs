@@ -3,7 +3,9 @@ use crate::tools::cmderror::CmdError::{self};
 use crate::tools::db::Database;
 use crate::tools::fmt::human_readable_size;
 use chrono::{DateTime, Local};
-use rusqlite::{Params, params};
+use sqlx::query::Query;
+use sqlx::sqlite::SqliteArguments;
+use sqlx::{Row, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::Metadata;
@@ -181,80 +183,86 @@ impl File {
         }
     }
 
-    pub fn find_entry(db: &Database, name: &Path) -> Result<Option<File>, CmdError> {
+    pub async fn find_entry(db: &Database, name: &Path) -> Result<Option<File>, CmdError> {
         let path = Self::fqn(name);
         let mut sql = String::from(READ_NO_SNAPSHOT);
         sql.push_str(" WHERE path||'");
         sql.push(MAIN_SEPARATOR);
         sql.push_str("'||name=?1");
-        let mut files = File::list(db, &sql, params![path])?;
+        let mut files = File::list(db, &sql, |q| q.bind(path)).await?;
         if !files.is_empty() {
             return Ok(Some(files.swap_remove(0)));
         }
         Ok(None)
     }
 
-    pub fn exists(&self, db: &Database, sid: u64) -> Result<bool, CmdError> {
+    pub async fn exists(&self, db: &Database, sid: u64) -> Result<bool, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND path=?2 AND name=?3");
-        db.exists(&sql, params![sid, String::from(self.path.to_str().unwrap()), String::from(self.name.to_str().unwrap())])
+        db.exists(&sql, |q| {
+            q.bind(sid as i64).bind(String::from(self.path.to_str().unwrap())).bind(String::from(self.name.to_str().unwrap()))
+        })
+        .await
     }
 
-    pub fn archive_exists(&self, db: &Database, sid: u64) -> Result<bool, CmdError> {
+    pub async fn archive_exists(&self, db: &Database, sid: u64) -> Result<bool, CmdError> {
         let mut sql = String::from(READ_NO_SNAPSHOT);
         sql.push_str(" WHERE deleted_sid=?1 AND path=?2 AND name=?3");
-        db.exists(&sql, params![sid, String::from(self.path.to_str().unwrap()), String::from(self.name.to_str().unwrap())])
+        db.exists(&sql, |q| {
+            q.bind(sid as i64).bind(String::from(self.path.to_str().unwrap())).bind(String::from(self.name.to_str().unwrap()))
+        })
+        .await
     }
 
-    pub fn history(db: &Database, name: &str) -> Result<Vec<File>, CmdError> {
+    pub async fn history(db: &Database, name: &str) -> Result<Vec<File>, CmdError> {
         let path = Self::fqn(&PathBuf::from(name));
         let mut sql = String::from(READ);
         sql.push_str(" WHERE path||'");
         sql.push(MAIN_SEPARATOR);
-        sql.push_str("'||name REGEXP ?1 ORDER BY path ASC, name ASC");
-        File::list(db, &sql, params![path])
+        sql.push_str("'||name LIKE ?1 ORDER BY path ASC, name ASC"); // TODO: restore REGEXP
+        File::list(db, &sql, |q| q.bind(path)).await
     }
 
-    pub fn history_sync_mode(db: &Database, name: &str) -> Result<Vec<File>, CmdError> {
+    pub async fn history_sync_mode(db: &Database, name: &str) -> Result<Vec<File>, CmdError> {
         let path = Self::fqn(&PathBuf::from(name));
         let mut sql = String::from(READ_SYNC_MODE);
         sql.push_str(" WHERE path||'");
         sql.push(MAIN_SEPARATOR);
-        sql.push_str("'||name REGEXP ?1 ORDER BY path ASC, name ASC");
-        File::list(db, &sql, params![path])
+        sql.push_str("'||name LIKE ?1 ORDER BY path ASC, name ASC"); // TODO: restore REGEXP
+        File::list(db, &sql, |q| q.bind(path)).await
     }
 
-    pub fn orphans(db: &Database) -> Result<Vec<File>, CmdError> {
-        File::list(db, ORPHANS, params![])
+    pub async fn orphans(db: &Database) -> Result<Vec<File>, CmdError> {
+        File::list(db, ORPHANS, |q| q).await
     }
 
-    pub fn distinct_entries(db: &Database) -> Result<Vec<File>, CmdError> {
+    pub async fn distinct_entries(db: &Database) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ_NO_SNAPSHOT);
         sql.push_str(" GROUP BY path, name");
-        File::list(db, &sql, params![])
+        File::list(db, &sql, |q| q).await
     }
 
-    pub fn deleted_files(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
+    pub async fn deleted_files(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND deleted_sid=?2 AND fv.is_dir=0 ORDER BY fv.path ASC, fv.name ASC");
-        File::list(db, &sql, params![psid, sid])
+        File::list(db, &sql, |q| q.bind(psid as i64).bind(sid as i64)).await
     }
 
-    pub fn deleted_files_sync_mode(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
+    pub async fn deleted_files_sync_mode(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ_SYNC_MODE);
         sql.push_str(" WHERE snapshot_id=?1 AND is_dir=0 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) ORDER BY path ASC, name ASC");
-        File::list(db, &sql, params![psid, sid])
+        File::list(db, &sql, |q| q.bind(psid as i64).bind(sid as i64)).await
     }
 
-    pub fn filesystem_dirs(db: &Database) -> Result<Vec<File>, CmdError> {
-        Self::filesystem(db, What::Dirs)
+    pub async fn filesystem_dirs(db: &Database) -> Result<Vec<File>, CmdError> {
+        Self::filesystem(db, What::Dirs).await
     }
 
-    pub fn filesystem_entries(db: &Database) -> Result<Vec<File>, CmdError> {
-        Self::filesystem(db, What::All)
+    pub async fn filesystem_entries(db: &Database) -> Result<Vec<File>, CmdError> {
+        Self::filesystem(db, What::All).await
     }
 
-    fn filesystem(db: &Database, what: What) -> Result<Vec<File>, CmdError> {
+    async fn filesystem(db: &Database, what: What) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ_NO_SNAPSHOT);
         match what {
             What::All => (),
@@ -262,58 +270,58 @@ impl File {
             What::Files => sql.push_str(" WHERE is_dir=0"),
         };
         sql.push_str(" ORDER BY path ASC, name ASC");
-        File::list(db, &sql, params![])
+        File::list(db, &sql, |q| q).await
     }
 
-    pub fn children_dirs(db: &Database, sid: u64, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
-        Self::children(db, sid, path, What::Dirs)
+    pub async fn children_dirs(db: &Database, sid: u64, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
+        Self::children(db, sid, path, What::Dirs).await
     }
 
-    pub fn children_files(db: &Database, sid: u64, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
-        Self::children(db, sid, path, What::Files)
+    pub async fn children_files(db: &Database, sid: u64, path: &Path) -> Result<HashMap<PathBuf, File>, CmdError> {
+        Self::children(db, sid, path, What::Files).await
     }
 
-    fn children(db: &Database, sid: u64, path: &Path, what: What) -> Result<HashMap<PathBuf, File>, CmdError> {
+    async fn children(db: &Database, sid: u64, path: &Path, what: What) -> Result<HashMap<PathBuf, File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND fv.path=?2");
         Self::entry_type(&mut sql, what);
-        File::list_by_path(db, &sql, params![sid, path.to_str().unwrap()])
+        File::list_by_path(db, &sql, |q| q.bind(sid as i64).bind(path.to_str().unwrap())).await
     }
 
-    pub fn all_entries(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
+    pub async fn all_entries(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1");
         sql.push_str(" ORDER BY fv.path ASC, fv.is_dir DESC, fv.name ASC");
-        File::list(db, &sql, params![sid])
+        File::list(db, &sql, |q| q.bind(sid as i64)).await
     }
 
-    pub fn dirs(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
-        Self::entries(db, sid, What::Dirs)
+    pub async fn dirs(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
+        Self::entries(db, sid, What::Dirs).await
     }
 
-    pub fn files(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
-        Self::entries(db, sid, What::Files)
+    pub async fn files(db: &Database, sid: u64) -> Result<Vec<File>, CmdError> {
+        Self::entries(db, sid, What::Files).await
     }
 
-    fn entries(db: &Database, sid: u64, what: What) -> Result<Vec<File>, CmdError> {
+    async fn entries(db: &Database, sid: u64, what: What) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1");
         Self::entry_type(&mut sql, what);
         sql.push_str(" ORDER BY fv.path ASC, fv.name ASC");
-        File::list(db, &sql, params![sid])
+        File::list(db, &sql, |q| q.bind(sid as i64)).await
     }
 
-    pub fn diff(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
+    pub async fn diff(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         // in previous snapshot, but not in current
         sql.push_str(" WHERE sf.snapshot_id=?2 AND deleted_sid!=0 AND fv.id NOT IN (SELECT version_id FROM snapshotfiles WHERE snapshot_id=?1) UNION ");
         sql.push_str(READ);
         // in current snapshot, but not in previous
         sql.push_str(" WHERE sf.snapshot_id=?1 AND fv.id NOT IN (SELECT version_id FROM snapshotfiles WHERE snapshot_id=?2) ORDER BY fv.path ASC, fv.name");
-        File::list(db, &sql, params![sid, psid])
+        File::list(db, &sql, |q| q.bind(sid as i64).bind(psid as i64)).await
     }
 
-    pub fn diff_sync_mode(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
+    pub async fn diff_sync_mode(db: &Database, psid: u64, sid: u64) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ_SYNC_MODE);
         // in previous snapshot, but not in current
         sql.push_str(" WHERE snapshot_id=?2 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?1) UNION ");
@@ -322,135 +330,137 @@ impl File {
         sql.push_str(" WHERE snapshot_id=?1 AND path||name NOT IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2) UNION ");
         sql.push_str(READ_SYNC_MODE);
         sql.push_str(" fh WHERE snapshot_id=?1 AND path||name IN (SELECT path||name FROM filehistory WHERE snapshot_id=?2 AND (fh.modified!= modified OR fh.size!= size)) ORDER BY path ASC, name");
-        File::list(db, &sql, params![sid, psid])
+        File::list(db, &sql, |q| q.bind(sid as i64).bind(psid as i64)).await
     }
 
-    pub fn dirs_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
-        Self::matching(db, sid, spec, What::Dirs)
+    pub async fn dirs_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
+        Self::matching(db, sid, spec, What::Dirs).await
     }
 
-    pub fn files_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
-        Self::matching(db, sid, spec, What::Files)
+    pub async fn files_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
+        Self::matching(db, sid, spec, What::Files).await
     }
 
-    pub fn entries_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
-        Self::matching(db, sid, spec, What::All)
+    pub async fn entries_matching(db: &Database, sid: u64, spec: &str) -> Result<Vec<File>, CmdError> {
+        Self::matching(db, sid, spec, What::All).await
     }
 
-    fn matching(db: &Database, sid: u64, spec: &str, what: What) -> Result<Vec<File>, CmdError> {
+    async fn matching(db: &Database, sid: u64, spec: &str, what: What) -> Result<Vec<File>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE sf.snapshot_id=?1 AND ");
         Self::entry_type(&mut sql, what);
         sql.push_str("fv.path||'");
         sql.push(MAIN_SEPARATOR);
-        sql.push_str("'||fv.name REGEXP ?2");
-        File::list(db, &sql, params![sid, spec])
+        sql.push_str("'||fv.name LIKE ?2"); // TODO: restore REGEXP
+        File::list(db, &sql, |q| q.bind(sid as i64).bind(spec)).await
     }
 
-    pub fn insert(&mut self, db: &Database, sid: u64) -> Result<(), CmdError> {
-        let id = db.query_one(
-            INSERT,
-            params![
-                self.digest,
-                self.path.to_str().unwrap(),
-                self.archive.to_str().unwrap(),
-                self.name.to_str().unwrap(),
-                self.size,
-                self.created,
-                self.modified,
-                self.deleted_sid,
-                self.is_dir,
-            ],
-            |row| row.get(0),
-        )?;
+    pub async fn insert(&mut self, db: &Database, sid: u64) -> Result<(), CmdError> {
+        let id = db
+            .query_one(
+                INSERT,
+                |q| {
+                    q.bind(self.digest.clone())
+                        .bind(self.path.to_str().unwrap())
+                        .bind(self.archive.to_str().unwrap())
+                        .bind(self.name.to_str().unwrap())
+                        .bind(self.size as i64)
+                        .bind(self.created)
+                        .bind(self.modified)
+                        .bind(self.deleted_sid as i64)
+                        .bind(self.is_dir)
+                },
+                |row| row.try_get::<i64, _>(0),
+            )
+            .await?;
         match id {
             Some(id) => {
-                self.id = id;
-                self.insert_ref(db, sid)
+                self.id = id as u64;
+                self.insert_ref(db, sid).await
             }
             None => Err(CmdError::GenericError(format!("Expecting id after {}", INSERT))),
         }
     }
 
-    pub fn insert_ref(&self, db: &Database, sid: u64) -> Result<(), CmdError> {
-        db.execute(INSERT_REF, params![sid, self.id])
+    pub async fn insert_ref(&self, db: &Database, sid: u64) -> Result<(), CmdError> {
+        db.execute(INSERT_REF, |q| q.bind(sid as i64).bind(self.id as i64)).await
     }
 
-    pub fn insert_history_sync_mode(db: &Database, sid: u64) -> Result<(), CmdError> {
-        db.execute(INSERT_HISTORY_SYNC_MODE, params![sid])
+    pub async fn insert_history_sync_mode(db: &Database, sid: u64) -> Result<(), CmdError> {
+        db.execute(INSERT_HISTORY_SYNC_MODE, |q| q.bind(sid as i64)).await
     }
 
-    pub fn archive(&mut self, db: &Database, sid: u64) -> Result<(), CmdError> {
+    pub async fn archive(&mut self, db: &Database, sid: u64) -> Result<(), CmdError> {
         self.archive = PathBuf::from(BURST_VERSION_DIR).join(sid.to_string());
-        db.execute(ARCHIVE, params![self.id, self.archive.to_str().unwrap(), self.deleted_sid])
+        db.execute(ARCHIVE, |q| q.bind(self.id as i64).bind(self.archive.to_str().unwrap()).bind(self.deleted_sid as i64)).await
     }
 
-    pub fn unarchive(&mut self, db: &Database) -> Result<(), CmdError> {
-        db.execute(ARCHIVE, params![self.id, String::new(), self.deleted_sid])
+    pub async fn unarchive(&mut self, db: &Database) -> Result<(), CmdError> {
+        db.execute(ARCHIVE, |q| q.bind(self.id as i64).bind(String::new()).bind(self.deleted_sid as i64)).await
     }
 
-    pub fn update(&self, db: &Database) -> Result<(), CmdError> {
-        db.execute(UPDATE, params![self.digest, self.size, self.modified, self.id])
+    pub async fn update(&self, db: &Database) -> Result<(), CmdError> {
+        db.execute(UPDATE, |q| q.bind(self.digest.clone()).bind(self.size as i64).bind(self.modified).bind(self.id as i64)).await
     }
 
-    pub fn update_ref(&self, db: &Database, file: &File) -> Result<(), CmdError> {
-        db.execute(UPDATE_REF, params![file.id, self.id])
+    pub async fn update_ref(&self, db: &Database, file: &File) -> Result<(), CmdError> {
+        db.execute(UPDATE_REF, |q| q.bind(file.id as i64).bind(self.id as i64)).await
     }
 
-    pub fn delete(&self, db: &Database) -> Result<(), CmdError> {
-        db.execute(DELETE, params![self.id])
+    pub async fn delete(&self, db: &Database) -> Result<(), CmdError> {
+        db.execute(DELETE, |q| q.bind(self.id as i64)).await
     }
 
-    pub fn delete_ref(&self, db: &Database) -> Result<(), CmdError> {
+    pub async fn delete_ref(&self, db: &Database) -> Result<(), CmdError> {
         let mut sql = String::from(DELETE_REF);
         sql.push_str(" WHERE version_id=?1");
-        db.execute(&sql, params![self.id])
+        db.execute(&sql, |q| q.bind(self.id as i64)).await
     }
 
-    pub fn delete_sync_mode(db: &Database, sid: u64) -> Result<(), CmdError> {
+    pub async fn delete_sync_mode(db: &Database, sid: u64) -> Result<(), CmdError> {
         let mut sql = String::from(DELETE_SYNC_MODE);
         sql.push_str(" WHERE snapshot_id=?1");
-        db.execute(&sql, params![sid])
+        db.execute(&sql, |q| q.bind(sid as i64)).await
     }
 
-    pub fn delete_all_refs_keep_snapshot(db: &Database, sid: u64, path: &Path, name: &Path) -> Result<(), CmdError> {
+    pub async fn delete_all_refs_keep_snapshot(db: &Database, sid: u64, path: &Path, name: &Path) -> Result<(), CmdError> {
         let mut sql = String::from(DELETE_REF);
         sql.push_str(" WHERE snapshot_id!=?1");
         if !path.as_os_str().is_empty() && !name.as_os_str().is_empty() {
             sql.push_str(" AND version_id IN (SELECT id FROM fileversions WHERE path=?2 AND name=?3)");
-            db.execute(&sql, params![sid, path.to_str().unwrap(), name.to_str().unwrap()])
+            db.execute(&sql, |q| q.bind(sid as i64).bind(path.to_str().unwrap()).bind(name.to_str().unwrap())).await
         } else if !path.as_os_str().is_empty() {
             sql.push_str(" AND version_id IN (SELECT id FROM fileversions WHERE path=?2)");
-            db.execute(&sql, params![sid, path.to_str().unwrap()])
+            db.execute(&sql, |q| q.bind(sid as i64).bind(path.to_str().unwrap())).await
         } else if !name.as_os_str().is_empty() {
             sql.push_str(" AND version_id IN (SELECT id FROM fileversions WHERE name=?2)");
-            db.execute(&sql, params![sid, name.to_str().unwrap()])
+            db.execute(&sql, |q| q.bind(sid as i64).bind(name.to_str().unwrap())).await
         } else {
-            db.execute(&sql, params![sid])
+            db.execute(&sql, |q| q.bind(sid as i64)).await
         }
     }
 
-    pub fn delete_all(db: &Database, sid: u64) -> Result<(), CmdError> {
-        File::delete_all_by_sid(db, sid)
+    pub async fn delete_all(db: &Database, sid: u64) -> Result<(), CmdError> {
+        File::delete_all_by_sid(db, sid).await
     }
 
-    pub fn delete_all_by_sid(db: &Database, sid: u64) -> Result<(), CmdError> {
-        db.execute(DELETE_SNAPSHOT, params![sid])
+    pub async fn delete_all_by_sid(db: &Database, sid: u64) -> Result<(), CmdError> {
+        db.execute(DELETE_SNAPSHOT, |q| q.bind(sid as i64)).await
     }
 
-    pub fn delete_files(db: &Database, sid: u64, spec: &str) -> Result<(), CmdError> {
+    pub async fn delete_files(db: &Database, sid: u64, spec: &str) -> Result<(), CmdError> {
         let mut sql = String::from(DELETE_SNAPSHOT);
         sql.push_str(" AND version_id IN (SELECT id FROM fileversions WHERE path||'");
         sql.push(MAIN_SEPARATOR);
-        sql.push_str("'||name REGEXP ?2)");
-        db.execute(&sql, params![sid, spec])
+        sql.push_str("'||name LIKE ?2)"); // TODO: restore REGEXP
+        db.execute(&sql, |q| q.bind(sid as i64).bind(spec)).await
     }
 
-    fn list_by_path<P>(db: &Database, sql: &str, params: P) -> Result<HashMap<PathBuf, File>, CmdError>
+    async fn list_by_path<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<HashMap<PathBuf, File>, CmdError>
     where
-        P: Params,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        let files = File::list(db, sql, params)?;
+        let files = File::list(db, sql, bind).await?;
         let mut result: HashMap<PathBuf, File> = HashMap::new();
         for file in files {
             result.insert(file.fullname(), file);
@@ -458,29 +468,30 @@ impl File {
         Ok(result)
     }
 
-    fn list<P>(db: &Database, sql: &str, params: P) -> Result<Vec<File>, CmdError>
+    async fn list<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Vec<File>, CmdError>
     where
-        P: Params,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        db.query_list(sql, params, |row| {
-            let checksum: String = row.get(2)?;
-            let path: String = row.get(3)?;
-            let archive: String = row.get(4)?;
-            let name: String = row.get(5)?;
+        db.query_list(sql, bind, |row| {
+            let checksum: String = row.try_get(2)?;
+            let path: String = row.try_get(3)?;
+            let archive: String = row.try_get(4)?;
+            let name: String = row.try_get(5)?;
             Ok(File {
-                id: row.get(0)?,
-                sid: row.get(1)?,
+                id: row.try_get::<i64, _>(0)? as u64,
+                sid: row.try_get::<i64, _>(1)? as u64,
                 digest: checksum,
                 path: PathBuf::from(path),
                 archive: PathBuf::from(archive),
                 name: PathBuf::from(name),
-                size: row.get(6)?,
-                created: row.get(7)?,
-                modified: row.get(8)?,
-                deleted_sid: row.get(9)?,
-                is_dir: row.get(10)?,
+                size: row.try_get::<i64, _>(6)? as u64,
+                created: row.try_get(7)?,
+                modified: row.try_get(8)?,
+                deleted_sid: row.try_get::<i64, _>(9)? as u64,
+                is_dir: row.try_get(10)?,
             })
         })
+        .await
     }
 }
 

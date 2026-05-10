@@ -9,6 +9,8 @@ use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOpti
 use crate::tools::db::Database;
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Instant;
 
 pub struct RestoreCommand {
@@ -29,7 +31,7 @@ impl From<RestoreArgs> for RestoreCommand {
 
 impl Command for RestoreCommand {
     fn validate(&mut self) -> Result<(), CmdError> {
-        if !self.args.to.exists() {
+        if !self.args.to.try_exists().map_err(|err| CmdError::IoError(crate::tools::cmderror::IoError::from(&self.args.to, err)))? {
             return Err(InvalidOption(String::from("Invalid restore path")));
         }
         if self.args.sid == 0 {
@@ -58,13 +60,14 @@ impl Command for RestoreCommand {
         println!("\tPDFs inside any manuals folders:\t--pattern: \"/?manuals(/.*)?/.*\\.pdf$\"");
     }
 
-    fn run(&mut self) -> Result<(), CmdError> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+        Box::pin(async move {
         let start = Instant::now();
         if self.args.verbose {
             println!("restore command started");
             println!("Running {}", self.args);
         }
-        match command::start(&self.args.config.target) {
+        match command::start(&self.args.config.target).await {
             Ok(_) => (),
             Err(err) => match err {
                 CmdError::NoRemote() => {
@@ -75,13 +78,13 @@ impl Command for RestoreCommand {
                 _ => return Err(err),
             },
         };
-        self.args.config.read(&command::config_file(&self.args.config.target))?;
-        let db = Database::open(&self.args.config.target)?;
+        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+        let db = Database::open(&self.args.config.target).await?;
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
-        match Snapshot::get(&db, self.args.sid)? {
-            Some(snapshot) => self.restore(&db, &fs, &snapshot)?,
-            None => match Snapshot::get_latest(&db)? {
-                Some(snapshot) => self.restore(&db, &fs, &snapshot)?,
+        match Snapshot::get(&db, self.args.sid).await? {
+            Some(snapshot) => self.restore(&db, &fs, &snapshot).await?,
+            None => match Snapshot::get_latest(&db).await? {
+                Some(snapshot) => self.restore(&db, &fs, &snapshot).await?,
                 None => return Err(InvalidOption(String::from("Snapshot not found"))),
             },
         }
@@ -92,18 +95,19 @@ impl Command for RestoreCommand {
                 human_readable_duration(start.elapsed().as_secs())
             )
         }
-        command::stop(&self.args.config.target)
+        command::stop(&self.args.config.target).await
+        })
     }
 }
 
 impl RestoreCommand {
-    fn restore(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot) -> Result<(), CmdError> {
-        let files = File::entries_matching(db, snapshot.id, &self.args.pattern)?;
+    async fn restore(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot) -> Result<(), CmdError> {
+        let files = File::entries_matching(db, snapshot.id, &self.args.pattern).await?;
         for file in files {
             if self.args.verbose {
                 println!("Restoring {}", file);
             }
-            if !self.args.dry_run && fs.restore_file(&file, &self.args.to, self.args.flatten, self.args.overwrite)? && self.args.verbose {
+            if !self.args.dry_run && fs.restore_file(&file, &self.args.to, self.args.flatten, self.args.overwrite).await? && self.args.verbose {
                 println!("Skipping existing file {}", file);
             }
         }

@@ -7,6 +7,8 @@ use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOpti
 use crate::tools::db::Database;
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
+use std::future::Future;
+use std::pin::Pin;
 use chrono::Datelike;
 use regex::Regex;
 use std::time::Instant;
@@ -57,13 +59,14 @@ impl Command for DeleteCommand {
         println!("\toffice folder and its content:\t\t--pattern: \"/?office(/.*)?$\"");
     }
 
-    fn run(&mut self) -> Result<(), CmdError> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+        Box::pin(async move {
         let start = Instant::now();
         if self.args.verbose {
             println!("delete command started");
             println!("Running {}", self.args);
         }
-        match command::start(&self.args.config.target) {
+        match command::start(&self.args.config.target).await {
             Ok(_) => (),
             Err(err) => match err {
                 CmdError::NoRemote() => {
@@ -74,18 +77,18 @@ impl Command for DeleteCommand {
                 _ => return Err(err),
             },
         };
-        self.args.config.read(&command::config_file(&self.args.config.target))?;
-        let db = Database::open(&self.args.config.target)?;
+        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+        let db = Database::open(&self.args.config.target).await?;
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
         if self.args.keep_last != 0 {
-            let snapshots = Snapshot::get_except_last(&db, self.args.keep_last)?;
+            let snapshots = Snapshot::get_except_last(&db, self.args.keep_last).await?;
             for snapshot in snapshots {
                 if !self.args.sids.contains(&snapshot.id) {
                     self.args.sids.push(snapshot.id);
                 }
             }
         } else if self.args.older_than.year() != 1970 {
-            let snapshots = Snapshot::get_before(&db, self.args.older_than)?;
+            let snapshots = Snapshot::get_before(&db, self.args.older_than).await?;
             for snapshot in snapshots {
                 if !self.args.sids.contains(&snapshot.id) {
                     self.args.sids.push(snapshot.id);
@@ -93,88 +96,89 @@ impl Command for DeleteCommand {
             }
         }
         match self.args.config.incremental {
-            true => self.delete_history_incremental(&db, &fs)?,
-            false => self.delete_history_non_incremental(&db, &fs)?,
+            true => self.delete_history_incremental(&db, &fs).await?,
+            false => self.delete_history_non_incremental(&db, &fs).await?,
         }
-        self.clean_up(&db, &fs)?;
+        self.clean_up(&db, &fs).await?;
         if !self.args.quiet {
             println!("Files successfully deleted from history in {}", human_readable_duration(start.elapsed().as_secs()));
         }
-        command::stop(&self.args.config.target)
+        command::stop(&self.args.config.target).await
+        })
     }
 }
 
 impl DeleteCommand {
-    fn unarchive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
+    async fn unarchive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
         file.deleted_sid = 0;
-        file.unarchive(db)?;
-        fs.unarchive_file(snapshot.id, file)
+        file.unarchive(db).await?;
+        fs.unarchive_file(snapshot.id, file).await
     }
 
-    fn unarchive_dir(&self, db: &Database, fs: &FileSystem, dir: &mut File) -> Result<(), CmdError> {
+    async fn unarchive_dir(&self, db: &Database, fs: &FileSystem, dir: &mut File) -> Result<(), CmdError> {
         dir.deleted_sid = 0;
-        dir.unarchive(db)?;
-        fs.remove_archive_dir(dir)
+        dir.unarchive(db).await?;
+        fs.remove_archive_dir(dir).await
     }
 
-    fn clean_up(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
-        let dirs = File::filesystem_dirs(db)?;
+    async fn clean_up(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+        let dirs = File::filesystem_dirs(db).await?;
         for dir in &dirs {
-            if !fs.exists(dir, &self.args.config.target) {
+            if !fs.exists(dir, &self.args.config.target).await? {
                 if self.args.verbose {
                     println!("  Removing directory {}", &dir);
                 }
-                dir.delete_ref(db)?;
-                dir.delete(db)?;
+                dir.delete_ref(db).await?;
+                dir.delete(db).await?;
             }
         }
         Ok(())
     }
 
-    fn delete_history_incremental(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn delete_history_incremental(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
         for sid in &self.args.sids {
             if !self.args.quiet {
                 println!("Deleting snapshot {} files", *sid);
             }
             if !self.args.dry_run {
                 if !self.args.pattern.is_empty() {
-                    File::delete_files(db, *sid, &self.args.pattern)?;
+                    File::delete_files(db, *sid, &self.args.pattern).await?;
                 } else {
-                    File::delete_all_by_sid(db, *sid)?;
-                    Snapshot::delete_by_id(db, *sid)?;
+                    File::delete_all_by_sid(db, *sid).await?;
+                    Snapshot::delete_by_id(db, *sid).await?;
                 }
             }
         }
-        let files = File::orphans(db)?;
+        let files = File::orphans(db).await?;
         for file in files {
             if self.args.verbose {
                 println!("  Removing file {}", file);
             }
             if !self.args.dry_run {
-                file.delete(db)?;
-                fs.remove_file(&file)?;
+                file.delete(db).await?;
+                fs.remove_file(&file).await?;
             }
         }
-        if let Some(snapshot) = Snapshot::get_latest(db)? {
-            let files = File::files(db, snapshot.id)?;
+        if let Some(snapshot) = Snapshot::get_latest(db).await? {
+            let files = File::files(db, snapshot.id).await?;
             for mut file in files {
                 if file.is_archived() {
                     if self.args.verbose {
                         println!("  Unarchiving file {}", &file);
                     }
                     if !self.args.dry_run {
-                        self.unarchive_file(db, fs, &snapshot, &mut file)?;
+                        self.unarchive_file(db, fs, &snapshot, &mut file).await?;
                     }
                 }
             }
-            let dirs = File::dirs(db, snapshot.id)?;
+            let dirs = File::dirs(db, snapshot.id).await?;
             for mut dir in dirs {
                 if dir.is_archived() {
                     if self.args.verbose {
                         println!("  Unarchiving directory {}", &dir);
                     }
                     if !self.args.dry_run {
-                        self.unarchive_dir(db, fs, &mut dir)?;
+                        self.unarchive_dir(db, fs, &mut dir).await?;
                     }
                 }
             }
@@ -182,13 +186,13 @@ impl DeleteCommand {
         Ok(())
     }
 
-    fn delete_history_non_incremental(&self, db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn delete_history_non_incremental(&self, db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
         for sid in &self.args.sids {
             if !self.args.quiet {
                 println!("Deleting snapshot {} files", *sid);
             }
             if !self.args.dry_run {
-                File::delete_sync_mode(db, *sid)?;
+                File::delete_sync_mode(db, *sid).await?;
             }
         }
         Ok(())

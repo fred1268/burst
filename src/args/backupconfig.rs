@@ -5,7 +5,6 @@ use crate::tools::fs::FileSystem;
 use hashlink::linked_hash_map::LinkedHashMap;
 use regex::Regex;
 use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::string::String;
 use yaml_rust2::{Yaml, YamlLoader};
@@ -73,8 +72,8 @@ impl fmt::Display for BackupConfig {
 }
 
 impl BackupConfig {
-    pub fn read(&mut self, filename: &Path) -> Result<(), CmdError> {
-        let cfg = fs::read_to_string(filename).map_err(|err| CmdError::IoError(IoError::from(filename, err)))?;
+    pub async fn read(&mut self, filename: &Path) -> Result<(), CmdError> {
+        let cfg = tokio::fs::read_to_string(filename).await.map_err(|err| CmdError::IoError(IoError::from(filename, err)))?;
         let yaml = YamlLoader::load_from_str(&cfg).map_err(|err| CmdError::IoError(IoError::from(filename, std::io::Error::other(err))))?;
         if let Some(map) = yaml[0].as_hash() {
             self.parse(map)?;
@@ -140,9 +139,10 @@ impl BackupConfig {
         Ok(())
     }
 
-    pub fn write(&self) -> Result<(), CmdError> {
+    pub async fn write(&self) -> Result<(), CmdError> {
         let home_dir = FileSystem::home_backup_dir(&self.target);
-        fs::write(home_dir.join(BURST_CONFIG_FILE), self.as_str())
+        tokio::fs::write(home_dir.join(BURST_CONFIG_FILE), self.as_str())
+            .await
             .map_err(|err| CmdError::IoError(IoError::from_str(BURST_CONFIG_FILE, err)))
     }
 

@@ -7,6 +7,8 @@ use crate::cmds::snapshot::Snapshot;
 use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption, InvalidSourceDirectory};
 use crate::tools::db::Database;
 use crate::tools::fs::FileSystem;
+use std::future::Future;
+use std::pin::Pin;
 use regex::Regex;
 use std::path::PathBuf;
 
@@ -95,12 +97,13 @@ impl Command for ConfigCommand {
         println!("\tmacOS trash:\t\t\t\tadd exclude: \".*/\\.DS_Store$\"");
     }
 
-    fn run(&mut self) -> Result<(), CmdError> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+        Box::pin(async move {
         if self.args.verbose {
             println!("config command started");
             println!("Running {}", self.args);
         }
-        match command::start(&self.args.config.target) {
+        match command::start(&self.args.config.target).await {
             Ok(_) => (),
             Err(err) => match err {
                 CmdError::NoRemote() => match self.args.subcommand.as_str() {
@@ -114,27 +117,28 @@ impl Command for ConfigCommand {
                 _ => return Err(err),
             },
         };
-        self.args.config.read(&command::config_file(&self.args.config.target))?;
-        let db = Database::open(&self.args.config.target)?;
+        self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+        let db = Database::open(&self.args.config.target).await?;
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
         match self.args.subcommand.as_str() {
-            "show" => self.show(&db, &fs)?,
-            "get" => self.get(&db, &fs)?,
-            "set" => self.set(&db, &fs)?,
-            "add" => self.add(&db, &fs)?,
-            "remove" => self.remove(&db, &fs)?,
-            "convert" => self.convert(&db, &fs)?,
+            "show" => self.show(&db, &fs).await?,
+            "get" => self.get(&db, &fs).await?,
+            "set" => self.set(&db, &fs).await?,
+            "add" => self.add(&db, &fs).await?,
+            "remove" => self.remove(&db, &fs).await?,
+            "convert" => self.convert(&db, &fs).await?,
             _ => (),
         }
         if !self.args.quiet {
             println!("Configuration updated");
         }
-        command::stop(&self.args.config.target)
+        command::stop(&self.args.config.target).await
+        })
     }
 }
 
 impl ConfigCommand {
-    fn show(&self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn show(&self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
         if self.args.verbose {
             println!("Showing config")
         }
@@ -142,7 +146,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    fn get(&self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn get(&self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
         if self.args.verbose {
             println!("Retrieving {}", self.args.key)
         }
@@ -158,7 +162,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    fn set(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn set(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
         if self.args.verbose {
             println!("Setting {} to {}", self.args.key, self.args.value)
         }
@@ -177,12 +181,12 @@ impl ConfigCommand {
             _ => return Err(InvalidOption(format!("Invalid key {}", self.args.key))),
         }
         if !self.args.dry_run {
-            self.args.config.write()?;
+            self.args.config.write().await?;
         }
         Ok(())
     }
 
-    fn add(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn add(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
         if self.args.verbose {
             println!("Adding {} to {}", self.args.value, self.args.key)
         }
@@ -196,7 +200,7 @@ impl ConfigCommand {
                         added.push(re);
                     }
                 }
-                self.fix_history(db, fs, &added, 0)?;
+                self.fix_history(db, fs, &added, 0).await?;
             }
             "no_history" => {
                 let mut added: Vec<Regex> = vec![];
@@ -207,19 +211,19 @@ impl ConfigCommand {
                         added.push(re);
                     }
                 }
-                if let Some(latest_snapshot) = Snapshot::get_latest(db)? {
-                    self.fix_history(db, fs, &added, latest_snapshot.id)?;
+                if let Some(latest_snapshot) = Snapshot::get_latest(db).await? {
+                    self.fix_history(db, fs, &added, latest_snapshot.id).await?;
                 }
             }
             _ => return Err(InvalidOption(format!("Invalid key {}", self.args.key))),
         }
         if !self.args.dry_run {
-            self.args.config.write()?;
+            self.args.config.write().await?;
         }
         Ok(())
     }
 
-    fn remove(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn remove(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
         if self.args.verbose {
             if self.args.value.is_empty() {
                 if self.args.verbose {
@@ -258,12 +262,12 @@ impl ConfigCommand {
             }
         }
         if !self.args.dry_run {
-            self.args.config.write()?;
+            self.args.config.write().await?;
         }
         Ok(())
     }
 
-    fn convert(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn convert(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
         if self.args.verbose {
             println!("Converting backup to {}", self.args.key)
         }
@@ -273,7 +277,7 @@ impl ConfigCommand {
             self.args.config.incremental = true;
         }
         if !self.args.dry_run {
-            self.args.config.write()?;
+            self.args.config.write().await?;
         }
         if !self.args.fix_history || self.args.config.incremental {
             return Ok(());
@@ -281,18 +285,18 @@ impl ConfigCommand {
         if !self.args.quiet {
             println!("Cleaning up previous snapshots")
         }
-        if let Some(latest_snapshot) = Snapshot::get_latest(db)?
+        if let Some(latest_snapshot) = Snapshot::get_latest(db).await?
             && !self.args.dry_run
         {
-            File::delete_all_refs_keep_snapshot(db, latest_snapshot.id, &PathBuf::new(), &PathBuf::new())?;
-            self.remove_orphans(db, fs)?;
-            latest_snapshot.delete_all_except(db)?;
-            File::insert_history_sync_mode(db, latest_snapshot.id)?;
+            File::delete_all_refs_keep_snapshot(db, latest_snapshot.id, &PathBuf::new(), &PathBuf::new()).await?;
+            self.remove_orphans(db, fs).await?;
+            latest_snapshot.delete_all_except(db).await?;
+            File::insert_history_sync_mode(db, latest_snapshot.id).await?;
         }
         Ok(())
     }
 
-    fn fix_history(&self, db: &Database, fs: &FileSystem, added: &[Regex], keep_sid: u64) -> Result<(), CmdError> {
+    async fn fix_history(&self, db: &Database, fs: &FileSystem, added: &[Regex], keep_sid: u64) -> Result<(), CmdError> {
         if !self.args.fix_history {
             return Ok(());
         }
@@ -305,7 +309,7 @@ impl ConfigCommand {
         if !self.args.quiet {
             println!("Cleaning up newly excluded files and directories");
         }
-        let entries = File::distinct_entries(db)?;
+        let entries = File::distinct_entries(db).await?;
         for re in added {
             for entry in &entries {
                 if !BackupConfig::matches(re, &entry.fullname()) {
@@ -316,26 +320,26 @@ impl ConfigCommand {
                 }
                 if !self.args.dry_run {
                     if entry.is_dir {
-                        File::delete_all_refs_keep_snapshot(db, keep_sid, &entry.fullname(), &PathBuf::new())?;
+                        File::delete_all_refs_keep_snapshot(db, keep_sid, &entry.fullname(), &PathBuf::new()).await?;
                     }
-                    File::delete_all_refs_keep_snapshot(db, keep_sid, &entry.path, &entry.name)?;
+                    File::delete_all_refs_keep_snapshot(db, keep_sid, &entry.path, &entry.name).await?;
                 }
             }
         }
-        self.remove_orphans(db, fs)
+        self.remove_orphans(db, fs).await
     }
 
-    fn remove_orphans(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
-        let entries = File::orphans(db)?;
+    async fn remove_orphans(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+        let entries = File::orphans(db).await?;
         for entry in entries {
             if self.args.verbose {
                 println!("  Removing {}", entry);
             }
             if !self.args.dry_run {
-                entry.delete(db)?;
+                entry.delete(db).await?;
                 match entry.is_dir {
-                    true => fs.remove_dir(&entry)?,
-                    false => fs.remove_file(&entry)?,
+                    true => fs.remove_dir(&entry).await?,
+                    false => fs.remove_file(&entry).await?,
                 }
             }
         }
