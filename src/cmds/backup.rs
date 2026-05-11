@@ -6,6 +6,7 @@ use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOpti
 use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
 use crate::tools::fs::FileSystem;
+use chrono::{DateTime, Local};
 use std::boxed::Box;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -19,7 +20,8 @@ use tokio::task::JoinSet;
 #[derive(Default)]
 struct Statistics {
     pub dirs: u64,
-    pub files: u64,
+    pub excl_dirs: u64,
+    pub excl_files: u64,
     pub has_files: bool,
 }
 
@@ -431,16 +433,19 @@ impl BackupCommand {
         if !statistics.has_files && !self.args.quiet {
             println!("Warning: backup is empty");
         }
-        snapshot.excluded_dirs = statistics.dirs;
-        snapshot.excluded_files = statistics.files;
+        snapshot.dirs = statistics.dirs;
+        snapshot.excluded_dirs = statistics.excl_dirs;
+        snapshot.excluded_files = statistics.excl_files;
         let prev_dir = self.read_previous_source(db).await?;
-        let _todo = self.compare_tree(dir, prev_dir);
+        let todo = self.compare_tree(dir, prev_dir);
+        self.compute_tree(db, snapshot, todo).await?;
         Ok(())
     }
 
     fn read_source(args: Arc<BackupArgs>, pid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
         Box::pin(async move {
             let mut statistics = Statistics::default();
+            statistics.dirs += 1;
             if !args.quiet && pid == 0 {
                 println!("Directory {:?}", root);
             }
@@ -449,6 +454,7 @@ impl BackupCommand {
             let mut entries = tokio::fs::read_dir(root.clone())
                 .await
                 .map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
+            let root_metadata = tokio::fs::symlink_metadata(&root).await.map_err(|err| CmdError::IoError(IoError::from(&root, err)))?;
             while let Some(entry) = entries.next_entry().await.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))? {
                 let p = entry.path();
                 let metadata = tokio::fs::symlink_metadata(&p).await.map_err(|err| CmdError::IoError(IoError::from(&p, err)))?;
@@ -460,12 +466,12 @@ impl BackupCommand {
                 }
                 if args.config.is_excluded(&p) {
                     if metadata.is_dir() {
-                        statistics.dirs += 1;
+                        statistics.excl_dirs += 1;
                         if args.verbose {
                             println!("Excluded directory {:?}", p)
                         }
                     } else {
-                        statistics.files += 1;
+                        statistics.excl_files += 1;
                         if args.verbose {
                             println!("  Excluded file {:?}", p.file_name().unwrap())
                         }
@@ -490,15 +496,17 @@ impl BackupCommand {
             while let Some(dir) = set.join_next().await {
                 let (dir, stats) = dir.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
                 statistics.dirs += stats.dirs;
-                statistics.files += stats.files;
+                statistics.excl_dirs += stats.excl_dirs;
+                statistics.excl_files += stats.excl_files;
                 statistics.has_files |= stats.has_files;
                 children.insert(dir);
             }
             Ok((
                 Directory::from_parts(
-                    PathBuf::from(
+                    File::from_metadata(
                         root.strip_prefix(&args.config.source)
                             .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
+                        root_metadata,
                     ),
                     files,
                     children,
@@ -508,18 +516,36 @@ impl BackupCommand {
         })
     }
 
-    fn build_directory(&self, by_path: &mut HashMap<PathBuf, Vec<File>>, path: PathBuf) -> Directory {
-        let entries = by_path.remove(&path).unwrap_or_default();
+    fn recurse_build_directory(&self, by_path: &mut HashMap<PathBuf, Vec<File>>, entry: File) -> Directory {
+        let entries = by_path.remove(&entry.fullname()).unwrap_or_default();
         let mut files = HashSet::new();
         let mut children = HashSet::new();
-        for entry in entries {
-            if entry.is_dir {
-                children.insert(self.build_directory(by_path, entry.fullname()));
+        for e in entries {
+            if e.is_dir {
+                children.insert(self.recurse_build_directory(by_path, e));
             } else {
-                files.insert(entry);
+                files.insert(e);
             }
         }
-        Directory { name: path, files, children }
+        Directory { entry, files, children }
+    }
+
+    fn build_directory(&self, by_path: &mut HashMap<PathBuf, Vec<File>>) -> Directory {
+        let date = DateTime::from_timestamp_secs(0).unwrap();
+        let file = File {
+            id: 0,
+            sid: 0,
+            digest: String::new(),
+            path: PathBuf::new(),
+            archive: PathBuf::new(),
+            name: PathBuf::new(),
+            size: 0,
+            created: DateTime::with_timezone(&date, &Local),
+            modified: DateTime::with_timezone(&date, &Local),
+            deleted_sid: 0,
+            is_dir: true,
+        };
+        self.recurse_build_directory(by_path, file)
     }
 
     async fn read_previous_source(&self, db: &Database) -> Result<Directory, CmdError> {
@@ -528,7 +554,7 @@ impl BackupCommand {
         for entry in entries {
             by_path.entry(entry.path.clone()).or_default().push(entry);
         }
-        Ok(self.build_directory(&mut by_path, PathBuf::new()))
+        Ok(self.build_directory(&mut by_path))
     }
 
     fn compare_tree(&self, src: Directory, prev: Directory) -> Todo {
@@ -541,7 +567,7 @@ impl BackupCommand {
         for file in src.files {
             if let Some(prev_file) = prev.files.take(&file) {
                 if prev_file.size != file.size || prev_file.modified != file.modified {
-                    todo.file_modified.push((file, prev_file));
+                    todo.file_modified.push((prev_file, file));
                 } else {
                     todo.file_unchanged.push(prev_file);
                 }
@@ -558,5 +584,132 @@ impl BackupCommand {
             todo.dir_added.push(child);
         }
         todo.dir_deleted.extend(prev.children.drain());
+    }
+
+    async fn process_new_files(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, files: Vec<File>) -> Result<(), CmdError> {
+        snapshot.count += files.len() as u64;
+        snapshot.new_count += files.len() as u64;
+        for mut file in files {
+            snapshot.size += file.size;
+            snapshot.new_size += file.size;
+            if self.args.verbose || self.previous_snapshot.id != 0 {
+                println!("  New file {:?}", file.fullname())
+            }
+            if !self.args.dry_run && (!self.args.cont || !file.exists(db, snapshot.id).await?) {
+                self.insert_new_file(db, fs, snapshot, &mut file).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_deleted_files(
+        &self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, files: Vec<File>,
+    ) -> Result<(), CmdError> {
+        snapshot.count += files.len() as u64;
+        snapshot.deleted_count += files.len() as u64;
+        for mut file in files {
+            snapshot.size += file.size;
+            snapshot.deleted_size += file.size;
+            file.deleted_sid = snapshot.id;
+            if self.args.verbose || self.previous_snapshot.id != 0 {
+                println!("  Deleted file {:?}", file.fullname())
+            }
+            if !self.args.dry_run {
+                if self.args.config.is_incremental(&file.fullname()) {
+                    if !self.args.cont
+                        || !file.archive_exists(db, snapshot.id).await?
+                        || !fs.exists(&file, &self.args.config.target).await?
+                    {
+                        self.archive_file(db, fs, snapshot, &mut file).await?;
+                    }
+                } else if !self.args.cont || file.exists(db, snapshot.id).await? {
+                    self.remove_file(db, fs, &file).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn process_new_dirs<'a>(
+        &'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, dir: Directory,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + '_>> {
+        Box::pin(async move {
+            let files: Vec<File> = dir.files.into_iter().collect();
+            self.process_new_files(db, fs, snapshot, files).await?;
+            let dirs: Vec<Directory> = dir.children.into_iter().collect();
+            for dir in dirs {
+                self.process_new_dirs(db, fs, snapshot, dir).await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn process_deleted_dirs<'a>(
+        &'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, mut dir: Directory,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + '_>> {
+        Box::pin(async move {
+            if self.args.verbose || self.previous_snapshot.id != 0 {
+                println!("Deleted dir {:?}", dir.entry.fullname())
+            }
+            let files: Vec<File> = dir.files.into_iter().collect();
+            self.process_deleted_files(db, fs, snapshot, files).await?;
+            let dirs: Vec<Directory> = dir.children.into_iter().collect();
+            for dir in dirs {
+                self.process_deleted_dirs(db, fs, snapshot, dir).await?;
+            }
+            if !self.args.dry_run {
+                if self.args.config.is_incremental(&dir.entry.fullname()) {
+                    if !self.args.cont || !dir.entry.archive_exists(db, snapshot.id).await? {
+                        self.archive_dir(db, fs, snapshot, &mut dir.entry).await?;
+                    }
+                } else if !self.args.cont || dir.entry.exists(db, snapshot.id).await? {
+                    self.remove_dir(db, fs, &dir.entry).await?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    async fn compute_tree(&self, db: &Database, snapshot: &mut Snapshot, todo: Todo) -> Result<(), CmdError> {
+        let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
+        self.process_new_files(db, &fs, snapshot, todo.file_added).await?;
+        snapshot.count += todo.file_modified.len() as u64;
+        snapshot.modified_count += todo.file_modified.len() as u64;
+        for (mut previous_file, mut file) in todo.file_modified {
+            snapshot.size += file.size;
+            snapshot.modified_size += file.size;
+            if self.args.verbose || self.previous_snapshot.id != 0 {
+                println!("  Modified file {:?}", previous_file.fullname())
+            }
+            if !self.args.dry_run {
+                if self.args.config.is_incremental(&file.fullname()) {
+                    if !self.args.cont || !file.exists(db, snapshot.id).await? {
+                        self.archive_file(db, &fs, snapshot, &mut previous_file).await?;
+                        self.insert_new_file(db, &fs, snapshot, &mut file).await?;
+                    }
+                } else if !self.args.cont || !file.exists(db, snapshot.id).await? {
+                    self.insert_new_file(db, &fs, snapshot, &mut file).await?;
+                    self.remove_previous_file(db, &fs, &previous_file, &file).await?;
+                }
+            }
+        }
+        snapshot.count += todo.file_unchanged.len() as u64;
+        snapshot.unchanged_count += todo.file_unchanged.len() as u64;
+        for previous_file in todo.file_unchanged {
+            snapshot.size += previous_file.size;
+            snapshot.unchanged_size += previous_file.size;
+            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, snapshot.id).await?) {
+                self.insert_unchanged_file(db, &fs, snapshot, &previous_file).await?;
+            }
+        }
+        self.process_deleted_files(db, &fs, snapshot, todo.file_deleted).await?;
+
+        for dir in todo.dir_added {
+            self.process_new_dirs(db, &fs, snapshot, dir).await?;
+        }
+        for dir in todo.dir_deleted {
+            self.process_deleted_dirs(db, &fs, snapshot, dir).await?;
+        }
+        Ok(())
     }
 }

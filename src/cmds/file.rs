@@ -497,20 +497,20 @@ impl File {
 
 #[derive(Debug)]
 pub struct Directory {
-    pub name: PathBuf,
+    pub entry: File,
     pub files: HashSet<File>,
     pub children: HashSet<Directory>,
 }
 
 impl fmt::Display for Directory {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.name)
+        write!(f, "{:?}", self.entry.fullname())
     }
 }
 
 impl PartialEq for Directory {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+        self.entry.name == other.entry.name
     }
 }
 
@@ -518,29 +518,12 @@ impl Eq for Directory {}
 
 impl std::hash::Hash for Directory {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
+        self.entry.name.hash(state);
     }
 }
 
 impl Directory {
-    pub fn new(path: &Path) -> Self {
-        Directory { name: PathBuf::from(path), files: HashSet::new(), children: HashSet::new() }
-    }
-
-    pub fn from_parts(name: PathBuf, files: HashSet<File>, children: HashSet<Directory>) -> Self {
-        Directory { name, files, children }
-    }
-
-    pub fn display(&self, level: u8) {
-        let mut indent = String::new();
-        (0..=level).for_each(|_| indent.push_str("  "));
-        println!("{}{:?}", indent, self.name);
-        for child in &self.children {
-            child.display(level + 1);
-        }
-        indent.push_str("  ");
-        for file in &self.files {
-            println!("{}{:?}", indent, file.name);
-        }
+    pub fn from_parts(entry: File, files: HashSet<File>, children: HashSet<Directory>) -> Self {
+        Directory { entry, files, children }
     }
 }
