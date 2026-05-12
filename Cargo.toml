@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 yaml-rust2 = "0.10.3"
 hashlink = "0.10.0"
-rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }
 chrono = "0.4.42"
 regex = "1.11.2"
 sha2 = "0.10.9"
-rusqlite_regex = "0.6.0"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+tokio = { version = "1", features = ["full"] }

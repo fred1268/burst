@@ -40,7 +40,7 @@ impl std::error::Error for CmdError {}
 
 #[derive(Debug)]
 pub struct DbError {
-    pub source: rusqlite::Error,
+    pub source: sqlx::Error,
     pub culprit: String,
 }
 
@@ -51,7 +51,7 @@ impl Display for DbError {
 }
 
 impl DbError {
-    pub fn from(culprit: &str, err: rusqlite::Error) -> Self {
+    pub fn from(culprit: &str, err: sqlx::Error) -> Self {
         DbError { culprit: String::from(culprit), source: err }
     }
 }

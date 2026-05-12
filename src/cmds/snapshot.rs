@@ -2,7 +2,9 @@ use crate::tools::cmderror::CmdError;
 use crate::tools::db::Database;
 use crate::tools::fmt::{human_readable_duration, human_readable_size};
 use chrono::{DateTime, Local};
-use rusqlite::{Params, params};
+use sqlx::query::Query;
+use sqlx::sqlite::SqliteArguments;
+use sqlx::{Row, Sqlite};
 use std::fmt;
 use std::time::Duration;
 
@@ -73,159 +75,159 @@ impl Snapshot {
         //      date               status  duration  excluded  total\t\t\tnew\t\t\tmodified\t\tunchanged\t\tdeleted");
     }
 
-    pub fn get_latest(db: &Database) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get_latest(db: &Database) -> Result<Option<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE deleted=0 ORDER BY created DESC LIMIT 1");
-        Snapshot::one(db, &sql, params![])
+        Snapshot::one(db, &sql, |q| q).await
     }
 
-    pub fn get_previous(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get_previous(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE deleted=0 AND id<?1 ORDER BY created DESC LIMIT 1");
-        Snapshot::one(db, &sql, params![id])
+        Snapshot::one(db, &sql, |q| q.bind(id as i64)).await
     }
 
-    pub fn get_previous_sync_mode(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get_previous_sync_mode(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id<?1 ORDER BY created DESC LIMIT 1");
-        Snapshot::one(db, &sql, params![id])
+        Snapshot::one(db, &sql, |q| q.bind(id as i64)).await
     }
 
-    pub fn get(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id=?1");
-        Snapshot::one(db, &sql, params![id])
+        Snapshot::one(db, &sql, |q| q.bind(id as i64)).await
     }
 
-    pub fn get_in_progress(db: &Database) -> Result<Option<Snapshot>, CmdError> {
-        Snapshot::one(db, READ_IN_PROGRESS, params![])
+    pub async fn get_in_progress(db: &Database) -> Result<Option<Snapshot>, CmdError> {
+        Snapshot::one(db, READ_IN_PROGRESS, |q| q).await
     }
 
-    pub fn get_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, CmdError> {
+    pub async fn get_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id!=0 ORDER BY created DESC LIMIT ?1");
-        Snapshot::list(db, &sql, params![limit])
+        Snapshot::list(db, &sql, |q| q.bind(limit as i64)).await
     }
 
-    pub fn get_except_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, CmdError> {
+    pub async fn get_except_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id!=0 AND id NOT IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT ?1) ORDER BY created DESC");
-        Snapshot::list(db, &sql, params![limit])
+        Snapshot::list(db, &sql, |q| q.bind(limit as i64)).await
     }
 
-    pub fn get_before(db: &Database, date: DateTime<Local>) -> Result<Vec<Snapshot>, CmdError> {
+    pub async fn get_before(db: &Database, date: DateTime<Local>) -> Result<Vec<Snapshot>, CmdError> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id!=0 AND id IN (SELECT id FROM snapshots WHERE created<?1) ORDER BY created DESC");
-        Snapshot::list(db, &sql, params![date])
+        Snapshot::list(db, &sql, |q| q.bind(date)).await
     }
 
-    pub fn insert_next(db: &Database) -> Result<Option<Snapshot>, CmdError> {
-        if let Some(snapshot) = Snapshot::one(db, INSERT, params![])? {
-            db.execute(IP_INSERT, params![snapshot.id])?;
+    pub async fn insert_next(db: &Database) -> Result<Option<Snapshot>, CmdError> {
+        if let Some(snapshot) = Snapshot::one(db, INSERT, |q| q).await? {
+            db.execute(IP_INSERT, |q| q.bind(snapshot.id as i64)).await?;
             return Ok(Some(snapshot));
         }
         Ok(None)
     }
 
-    pub fn update(&self, db: &Database) -> Result<(), CmdError> {
-        db.execute(
-            UPDATE,
-            params![
-                self.id,
-                self.duration.as_secs(),
-                self.status,
-                self.excluded_dirs,
-                self.excluded_files,
-                self.dirs,
-                self.count,
-                self.size,
-                self.new_count,
-                self.new_size,
-                self.modified_count,
-                self.modified_size,
-                self.unchanged_count,
-                self.unchanged_size,
-                self.deleted_count,
-                self.deleted_size
-            ],
-        )
+    pub async fn update(&self, db: &Database) -> Result<(), CmdError> {
+        db.execute(UPDATE, |q| {
+            q.bind(self.id as i64)
+                .bind(self.duration.as_secs() as i64)
+                .bind(self.status.clone())
+                .bind(self.excluded_dirs as i64)
+                .bind(self.excluded_files as i64)
+                .bind(self.dirs as i64)
+                .bind(self.count as i64)
+                .bind(self.size as i64)
+                .bind(self.new_count as i64)
+                .bind(self.new_size as i64)
+                .bind(self.modified_count as i64)
+                .bind(self.modified_size as i64)
+                .bind(self.unchanged_count as i64)
+                .bind(self.unchanged_size as i64)
+                .bind(self.deleted_count as i64)
+                .bind(self.deleted_size as i64)
+        })
+        .await
     }
 
-    pub fn mark_completed(&self, db: &Database) -> Result<(), CmdError> {
-        self.update(db)?;
-        db.execute(DELETE_IN_PROGRESS, params![self.id])
+    pub async fn mark_completed(&self, db: &Database) -> Result<(), CmdError> {
+        self.update(db).await?;
+        db.execute(DELETE_IN_PROGRESS, |q| q.bind(self.id as i64)).await
     }
 
-    pub fn delete(&self, db: &Database) -> Result<(), CmdError> {
-        Snapshot::delete_by_id(db, self.id)
+    pub async fn delete(&self, db: &Database) -> Result<(), CmdError> {
+        Snapshot::delete_by_id(db, self.id).await
     }
 
-    pub fn delete_by_id(db: &Database, id: u64) -> Result<(), CmdError> {
+    pub async fn delete_by_id(db: &Database, id: u64) -> Result<(), CmdError> {
         let mut sql = String::from(DELETE);
         sql.push_str(" WHERE id=?1");
-        db.execute(&sql, params![id])?;
-        db.execute(DELETE_IN_PROGRESS, params![id])
+        db.execute(&sql, |q| q.bind(id as i64)).await?;
+        db.execute(DELETE_IN_PROGRESS, |q| q.bind(id as i64)).await
     }
 
-    pub fn delete_all_except(&self, db: &Database) -> Result<(), CmdError> {
+    pub async fn delete_all_except(&self, db: &Database) -> Result<(), CmdError> {
         let mut sql = String::from(DELETE);
         sql.push_str(" WHERE id!=?1");
-        db.execute(&sql, params![self.id])
+        db.execute(&sql, |q| q.bind(self.id as i64)).await
     }
 
-    fn list<P>(db: &Database, sql: &str, params: P) -> Result<Vec<Snapshot>, CmdError>
+    async fn list<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Vec<Snapshot>, CmdError>
     where
-        P: Params,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        db.query_list(sql, params, |row| {
+        db.query_list(sql, bind, |row| {
             Ok(Snapshot {
-                id: row.get(0)?,
-                created: row.get(1)?,
-                duration: Duration::from_secs(row.get(2)?),
-                deleted: row.get(3)?,
-                status: row.get(4)?,
-                excluded_dirs: row.get(5)?,
-                excluded_files: row.get(6)?,
-                dirs: row.get(7)?,
-                count: row.get(8)?,
-                size: row.get(9)?,
-                new_count: row.get(10)?,
-                new_size: row.get(11)?,
-                modified_count: row.get(12)?,
-                modified_size: row.get(13)?,
-                unchanged_count: row.get(14)?,
-                unchanged_size: row.get(15)?,
-                deleted_count: row.get(16)?,
-                deleted_size: row.get(17)?,
+                id: row.try_get::<i64, _>(0)? as u64,
+                created: row.try_get(1)?,
+                duration: Duration::from_secs(row.try_get::<i64, _>(2)? as u64),
+                deleted: row.try_get(3)?,
+                status: row.try_get(4)?,
+                excluded_dirs: row.try_get::<i64, _>(5)? as u64,
+                excluded_files: row.try_get::<i64, _>(6)? as u64,
+                dirs: row.try_get::<i64, _>(7)? as u64,
+                count: row.try_get::<i64, _>(8)? as u64,
+                size: row.try_get::<i64, _>(9)? as u64,
+                new_count: row.try_get::<i64, _>(10)? as u64,
+                new_size: row.try_get::<i64, _>(11)? as u64,
+                modified_count: row.try_get::<i64, _>(12)? as u64,
+                modified_size: row.try_get::<i64, _>(13)? as u64,
+                unchanged_count: row.try_get::<i64, _>(14)? as u64,
+                unchanged_size: row.try_get::<i64, _>(15)? as u64,
+                deleted_count: row.try_get::<i64, _>(16)? as u64,
+                deleted_size: row.try_get::<i64, _>(17)? as u64,
             })
         })
+        .await
     }
 
-    fn one<P>(db: &Database, sql: &str, params: P) -> Result<Option<Snapshot>, CmdError>
+    async fn one<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Option<Snapshot>, CmdError>
     where
-        P: Params,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        db.query_one(sql, params, |row| {
+        db.query_one(sql, bind, |row| {
             Ok(Snapshot {
-                id: row.get(0)?,
-                created: row.get(1)?,
-                duration: Duration::from_secs(row.get(2)?),
-                deleted: row.get(3)?,
-                status: row.get(4)?,
-                excluded_dirs: row.get(5)?,
-                excluded_files: row.get(6)?,
-                dirs: row.get(7)?,
-                count: row.get(8)?,
-                size: row.get(9)?,
-                new_count: row.get(10)?,
-                new_size: row.get(11)?,
-                modified_count: row.get(12)?,
-                modified_size: row.get(13)?,
-                unchanged_count: row.get(14)?,
-                unchanged_size: row.get(15)?,
-                deleted_count: row.get(16)?,
-                deleted_size: row.get(17)?,
+                id: row.try_get::<i64, _>(0)? as u64,
+                created: row.try_get(1)?,
+                duration: Duration::from_secs(row.try_get::<i64, _>(2)? as u64),
+                deleted: row.try_get(3)?,
+                status: row.try_get(4)?,
+                excluded_dirs: row.try_get::<i64, _>(5)? as u64,
+                excluded_files: row.try_get::<i64, _>(6)? as u64,
+                dirs: row.try_get::<i64, _>(7)? as u64,
+                count: row.try_get::<i64, _>(8)? as u64,
+                size: row.try_get::<i64, _>(9)? as u64,
+                new_count: row.try_get::<i64, _>(10)? as u64,
+                new_size: row.try_get::<i64, _>(11)? as u64,
+                modified_count: row.try_get::<i64, _>(12)? as u64,
+                modified_size: row.try_get::<i64, _>(13)? as u64,
+                unchanged_count: row.try_get::<i64, _>(14)? as u64,
+                unchanged_size: row.try_get::<i64, _>(15)? as u64,
+                deleted_count: row.try_get::<i64, _>(16)? as u64,
+                deleted_size: row.try_get::<i64, _>(17)? as u64,
             })
         })
+        .await
     }
 }

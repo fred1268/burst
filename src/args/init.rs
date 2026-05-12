@@ -30,7 +30,7 @@ impl fmt::Display for InitArgs {
 }
 
 impl InitArgs {
-    pub fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
         if args.len() < MIN_PARAMS {
             return Err(CmdError::InvalidParameters);
         }
@@ -41,7 +41,7 @@ impl InitArgs {
         while n < args.len() {
             match args[n].as_str() {
                 "--config" | "-c" => {
-                    params.config.read(&PathBuf::from(&args[n + 1]))?;
+                    params.config.read(&PathBuf::from(&args[n + 1])).await?;
                     n += 1;
                 }
                 _ => n += 1,
@@ -95,13 +95,13 @@ impl InitArgs {
             n += 1
         }
         if !&args[args.len() - 2].starts_with("--") {
-            match FileSystem::canonicalize(&args[args.len() - 2]) {
+            match FileSystem::canonicalize(&args[args.len() - 2]).await {
                 Ok(source) => params.config.source = source,
                 Err(_) => return Err(CmdError::InvalidSourceDirectory()),
             }
         }
         if !&args[args.len() - 1].starts_with("--") {
-            match FileSystem::canonicalize(&args[args.len() - 1]) {
+            match FileSystem::canonicalize(&args[args.len() - 1]).await {
                 Ok(target) => params.config.target = target,
                 Err(_) => return Err(CmdError::InvalidBackupDirectory()),
             }

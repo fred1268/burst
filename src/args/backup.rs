@@ -6,7 +6,7 @@ use std::string::String;
 
 const MIN_PARAMS: usize = 3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct BackupArgs {
     pub config: BackupConfig,
     pub exe: String,
@@ -36,7 +36,7 @@ impl fmt::Display for BackupArgs {
 }
 
 impl BackupArgs {
-    pub fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
         if args.len() < MIN_PARAMS {
             return Err(CmdError::InvalidParameters);
         }
@@ -58,7 +58,7 @@ impl BackupArgs {
             n += 1
         }
         if !args[args.len() - 1].starts_with("--") {
-            match FileSystem::canonicalize(&args[args.len() - 1]) {
+            match FileSystem::canonicalize(&args[args.len() - 1]).await {
                 Ok(target) => params.config.target = target,
                 Err(_) => return Err(CmdError::InvalidBackupDirectory()),
             }

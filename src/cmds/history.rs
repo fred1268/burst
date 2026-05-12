@@ -4,6 +4,8 @@ use crate::cmds::command::Command;
 use crate::cmds::snapshot::Snapshot;
 use crate::tools::cmderror::CmdError;
 use crate::tools::db::Database;
+use std::future::Future;
+use std::pin::Pin;
 
 pub struct HistoryCommand {
     args: HistoryArgs,
@@ -37,27 +39,29 @@ impl Command for HistoryCommand {
         println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
     }
 
-    fn run(&mut self) -> Result<(), CmdError> {
-        if self.args.verbose {
-            println!("history command started");
-            println!("Running {}", self.args);
-        }
-        match command::start(&self.args.config.target) {
-            Ok(_) => (),
-            Err(err) => match err {
-                CmdError::NoRemote() => (),
-                _ => return Err(err),
-            },
-        };
-        self.args.config.read(&command::config_file(&self.args.config.target))?;
-        let db = Database::open(&self.args.config.target)?;
-        let snapshots = Snapshot::get_last(&db, self.args.limit)?;
-        if !self.args.quiet {
-            Snapshot::header();
-        }
-        for snapshot in snapshots {
-            println!("{}", snapshot)
-        }
-        command::stop(&self.args.config.target)
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+        Box::pin(async move {
+            if self.args.verbose {
+                println!("history command started");
+                println!("Running {}", self.args);
+            }
+            match command::start(&self.args.config.target).await {
+                Ok(_) => (),
+                Err(err) => match err {
+                    CmdError::NoRemote() => (),
+                    _ => return Err(err),
+                },
+            };
+            self.args.config.read(&command::config_file(&self.args.config.target)).await?;
+            let db = Database::open(&self.args.config.target).await?;
+            let snapshots = Snapshot::get_last(&db, self.args.limit).await?;
+            if !self.args.quiet {
+                Snapshot::header();
+            }
+            for snapshot in snapshots {
+                println!("{}", snapshot)
+            }
+            command::stop(&self.args.config.target).await
+        })
     }
 }

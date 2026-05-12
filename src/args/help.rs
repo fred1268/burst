@@ -17,7 +17,7 @@ impl fmt::Display for HelpArgs {
 }
 
 impl HelpArgs {
-    pub fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
         if args.len() < MIN_PARAMS {
             return Err(CmdError::InvalidParameters);
         }

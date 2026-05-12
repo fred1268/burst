@@ -2,11 +2,13 @@ use crate::cmds::constants::BURST_METADATA_FILE;
 use crate::tools::cmderror::{CmdError, DbError};
 use crate::tools::fs::FileSystem;
 use crate::tools::version::VERSION_1_1;
-use rusqlite::{Connection, Params, Result, Row, params};
-use rusqlite_regex;
+use sqlx::query::Query;
+use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqliteRow};
+use sqlx::{Row, Sqlite, SqlitePool};
 use std::path::Path;
+use std::time::Duration;
 
-const TABLE_EXISTS: &str = "SELECT name FROM sqlite_master WHERE type='table' AND name=?1";
+const TABLE_EXISTS: &str = "SELECT name FROM sqlite_master WHERE type='table' AND name=?";
 
 const IP_TABLE: &str = "CREATE TABLE inprogress (snapshot_id INTEGER, FOREIGN KEY (snapshot_id) REFERENCES snapshots(id))";
 
@@ -22,7 +24,7 @@ const FH_TABLE: &str = "CREATE TABLE filehistory (id INTEGER, snapshot_id INTEGE
 
 const VER_TABLE: &str = "CREATE TABLE version (id TEXT)";
 const VER_ZERO: &str = "INSERT INTO version (id) VALUES ('1.0')";
-const VER_UPDATE: &str = "UPDATE version SET id=?1";
+const VER_UPDATE: &str = "UPDATE version SET id=?";
 const VER_READ: &str = "SELECT id FROM version";
 
 const INDEX_FV: &str = "CREATE INDEX idx_fileversions ON fileversions(path, name)";
@@ -33,100 +35,86 @@ pub const MODE_WRITE: u8 = 0b0000_0001;
 pub const MODE_LOCAL: u8 = 0b0000_0010;
 
 pub struct Database {
-    connection: Connection,
+    pool: SqlitePool,
 }
 
 impl Database {
-    pub fn open(target: &Path) -> Result<Database, CmdError> {
-        rusqlite_regex::enable_auto_extension().map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?;
+    pub async fn open(target: &Path) -> Result<Database, CmdError> {
         let home_dir = FileSystem::home_backup_dir(target);
         let db_file = home_dir.join(BURST_METADATA_FILE);
-        let db = Database {
-            connection: Connection::open(&db_file).map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?,
-        };
-        db.check_tables()?;
-        db.upgrade()?;
+        let opts =
+            SqliteConnectOptions::new().filename(&db_file).journal_mode(SqliteJournalMode::Wal).busy_timeout(Duration::from_millis(5000));
+        let pool = SqlitePool::connect_with(opts).await.map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?;
+        let db = Database { pool };
+        db.check_tables().await?;
+        db.upgrade().await?;
         Ok(db)
     }
 
-    pub fn connection(&self) -> &Connection {
-        &self.connection
-    }
-
-    fn check_tables(&self) -> Result<(), CmdError> {
-        if !self.exists(TABLE_EXISTS, params!["inprogress"])? {
-            self.execute(IP_TABLE, ())?;
+    async fn check_tables(&self) -> Result<(), CmdError> {
+        if !self.exists(TABLE_EXISTS, |q| q.bind("inprogress")).await? {
+            self.execute(IP_TABLE, |q| q).await?;
         }
-        if !self.exists(TABLE_EXISTS, params!["snapshots"])? {
-            self.execute(SS_TABLE, ())?;
-            self.execute(SS_ZERO, ())?;
+        if !self.exists(TABLE_EXISTS, |q| q.bind("snapshots")).await? {
+            self.execute(SS_TABLE, |q| q).await?;
+            self.execute(SS_ZERO, |q| q).await?;
         }
-        if !self.exists(TABLE_EXISTS, params!["fileversions"])? {
-            self.execute(FV_TABLE, ())?;
-            self.execute(INDEX_FV, ())?;
+        if !self.exists(TABLE_EXISTS, |q| q.bind("fileversions")).await? {
+            self.execute(FV_TABLE, |q| q).await?;
+            self.execute(INDEX_FV, |q| q).await?;
         }
-        if !self.exists(TABLE_EXISTS, params!["snapshotfiles"])? {
-            self.execute(SF_TABLE, ())?;
-            self.execute(INDEX_SF1, ())?;
-            self.execute(INDEX_SF2, ())?;
+        if !self.exists(TABLE_EXISTS, |q| q.bind("snapshotfiles")).await? {
+            self.execute(SF_TABLE, |q| q).await?;
+            self.execute(INDEX_SF1, |q| q).await?;
+            self.execute(INDEX_SF2, |q| q).await?;
         }
-        if !self.exists(TABLE_EXISTS, params!["version"])? {
-            self.execute(VER_TABLE, ())?;
-            self.execute(VER_ZERO, ())?;
+        if !self.exists(TABLE_EXISTS, |q| q.bind("version")).await? {
+            self.execute(VER_TABLE, |q| q).await?;
+            self.execute(VER_ZERO, |q| q).await?;
         }
         Ok(())
     }
 
-    pub fn exists<P>(&self, sql: &str, params: P) -> Result<bool, CmdError>
+    pub async fn exists<'a, B>(&self, sql: &'a str, bind: B) -> Result<bool, CmdError>
     where
-        P: Params,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-        stmt.exists(params).map_err(|err| CmdError::DbError(DbError::from(sql, err)))
+        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        Ok(row.is_some())
     }
 
-    pub fn execute<P>(&self, sql: &str, params: P) -> Result<(), CmdError>
+    pub async fn execute<'a, B>(&self, sql: &'a str, bind: B) -> Result<(), CmdError>
     where
-        P: Params,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-        stmt.execute(params).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        bind(sqlx::query(sql)).execute(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
         Ok(())
     }
 
-    pub fn query_one<T, P, F>(&self, sql: &str, params: P, f: F) -> Result<Option<T>, CmdError>
+    pub async fn query_one<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Option<T>, CmdError>
     where
-        P: Params,
-        F: FnOnce(&Row<'_>) -> Result<T>,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
+        F: FnOnce(SqliteRow) -> Result<T, sqlx::Error>,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-        match stmt.query_one(params, f) {
-            Ok(one) => Ok(Some(one)),
-            Err(err) => match err {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                _ => Err(CmdError::DbError(DbError::from(sql, err))),
-            },
+        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        match row {
+            Some(r) => Ok(Some(f(r).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?)),
+            None => Ok(None),
         }
     }
 
-    pub fn query_list<T, P, F>(&self, sql: &str, params: P, f: F) -> Result<Vec<T>, CmdError>
+    pub async fn query_list<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Vec<T>, CmdError>
     where
-        P: Params,
-        F: FnMut(&Row<'_>) -> Result<T>,
+        B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
+        F: Fn(SqliteRow) -> Result<T, sqlx::Error>,
     {
-        let mut stmt = self.connection().prepare(sql).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-        let list = stmt.query_map(params, f).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-        let mut result: Vec<T> = Vec::new();
-        for one in list {
-            let one = one.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-            result.push(one);
-        }
-        Ok(result)
+        let rows = bind(sqlx::query(sql)).fetch_all(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        rows.into_iter().map(|r| f(r).map_err(|err| CmdError::DbError(DbError::from(sql, err)))).collect()
     }
 
-    fn upgrade(&self) -> Result<(), CmdError> {
+    async fn upgrade(&self) -> Result<(), CmdError> {
         loop {
-            let v: Option<String> = self.query_one(VER_READ, params![], |row| row.get(0))?;
+            let v: Option<String> = self.query_one(VER_READ, |q| q, |row| row.try_get(0)).await?;
             let version = match v {
                 Some(v) => v,
                 None => {
@@ -134,24 +122,24 @@ impl Database {
                 }
             };
             match version.as_str() {
-                "1.0" => self.upgrade_to_1_1()?,
-                "x.y" => self.upgrade_to_x_y()?,
+                "1.0" => self.upgrade_to_1_1().await?,
+                "x.y" => self.upgrade_to_x_y().await?,
                 _ => break,
             };
         }
         Ok(())
     }
 
-    fn upgrade_to_1_1(&self) -> Result<(), CmdError> {
-        self.execute(FH_TABLE, ())?;
-        self.execute("INSERT INTO filehistory SELECT id, snapshot_id, digest, path, archive, name, size, compressed_size, encrypted, created, modified, deleted_sid, is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.version_id WHERE sf.snapshot_id IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT 1)", ())?;
-        self.execute(VER_UPDATE, params![VERSION_1_1])
+    async fn upgrade_to_1_1(&self) -> Result<(), CmdError> {
+        self.execute(FH_TABLE, |q| q).await?;
+        self.execute("INSERT INTO filehistory SELECT id, snapshot_id, digest, path, archive, name, size, compressed_size, encrypted, created, modified, deleted_sid, is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.version_id WHERE sf.snapshot_id IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT 1)", |q| q).await?;
+        self.execute(VER_UPDATE, |q| q.bind(VERSION_1_1)).await
     }
 
-    fn upgrade_to_x_y(&self) -> Result<(), CmdError> {
+    async fn upgrade_to_x_y(&self) -> Result<(), CmdError> {
         // upgrade code here
 
-        // self.execute(VER_UPDATE, params![VERSION_x_y])
+        // self.execute(sqlx::query(VER_UPDATE).bind(VERSION_x_y)).await
         Ok(())
     }
 }
