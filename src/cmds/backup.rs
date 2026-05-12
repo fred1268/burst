@@ -31,6 +31,7 @@ type ReadDirectoryResult = Result<(Directory, Statistics), CmdError>;
 struct Todo {
     pub dir_added: Vec<Directory>,
     pub dir_deleted: Vec<Directory>,
+    pub dir_unchanged: Vec<File>,
     pub file_added: Vec<File>,
     pub file_deleted: Vec<File>,
     pub file_modified: Vec<(File, File)>,
@@ -559,13 +560,14 @@ impl BackupCommand {
 
     fn compare_tree(&self, src: Directory, prev: Directory) -> Todo {
         let mut todo = Todo::default();
-        self.recurse_compare_tree(src, prev, &mut todo);
+        let Directory { entry: _, files: prev_files, children: prev_children } = prev;
+        self.recurse_compare_tree(src, prev_files, prev_children, &mut todo);
         todo
     }
 
-    fn recurse_compare_tree(&self, src: Directory, mut prev: Directory, todo: &mut Todo) {
+    fn recurse_compare_tree(&self, src: Directory, mut prev_files: HashSet<File>, mut prev_children: HashSet<Directory>, todo: &mut Todo) {
         for file in src.files {
-            if let Some(prev_file) = prev.files.take(&file) {
+            if let Some(prev_file) = prev_files.take(&file) {
                 if prev_file.size != file.size || prev_file.modified != file.modified {
                     todo.file_modified.push((prev_file, file));
                 } else {
@@ -575,15 +577,16 @@ impl BackupCommand {
             }
             todo.file_added.push(file);
         }
-        todo.file_deleted.extend(prev.files.drain());
+        todo.file_deleted.extend(prev_files.drain());
         for child in src.children {
-            if let Some(prev_child) = prev.children.take(&child) {
-                self.recurse_compare_tree(child, prev_child, todo);
+            if let Some(Directory { entry: prev_entry, files: prev_files, children: prev_children }) = prev_children.take(&child) {
+                self.recurse_compare_tree(child, prev_files, prev_children, todo);
+                todo.dir_unchanged.push(prev_entry);
                 continue;
             }
             todo.dir_added.push(child);
         }
-        todo.dir_deleted.extend(prev.children.drain());
+        todo.dir_deleted.extend(prev_children.drain());
     }
 
     async fn process_new_files(&self, db: &Database, fs: &FileSystem, snapshot: &mut Snapshot, files: Vec<File>) -> Result<(), CmdError> {
@@ -631,9 +634,12 @@ impl BackupCommand {
     }
 
     fn process_new_dirs<'a>(
-        &'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, dir: Directory,
+        &'a self, db: &'a Database, fs: &'a FileSystem, snapshot: &'a mut Snapshot, mut dir: Directory,
     ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + '_>> {
         Box::pin(async move {
+            if !self.args.dry_run && (!self.args.cont || !dir.entry.exists(db, snapshot.id).await?) {
+                dir.entry.insert(db, snapshot.id).await?;
+            }
             let files: Vec<File> = dir.files.into_iter().collect();
             self.process_new_files(db, fs, snapshot, files).await?;
             let dirs: Vec<Directory> = dir.children.into_iter().collect();
@@ -704,6 +710,11 @@ impl BackupCommand {
         }
         self.process_deleted_files(db, &fs, snapshot, todo.file_deleted).await?;
 
+        for dir in todo.dir_unchanged {
+            if !self.args.dry_run && (!self.args.cont || !dir.exists(db, snapshot.id).await?) {
+                dir.insert_ref(db, snapshot.id).await?;
+            }
+        }
         for dir in todo.dir_added {
             self.process_new_dirs(db, &fs, snapshot, dir).await?;
         }
