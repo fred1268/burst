@@ -1,6 +1,6 @@
 use crate::args::{backup, help, init, list};
 use crate::args::{config, delete, history, restore, verify};
-use crate::tools::cmderror::CmdError::{self, InvalidParameters};
+use crate::tools::error::Error::{self, InvalidParameters};
 use std::string::String;
 
 pub enum Args {
@@ -16,9 +16,9 @@ pub enum Args {
 }
 
 impl Args {
-    pub async fn from_args(args: &[String]) -> Result<Args, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Args, Error> {
         if args.len() < 2 {
-            return Err(CmdError::MissingCommand);
+            return Err(Error::MissingCommand);
         }
         match args[1].as_str() {
             "help" => help::HelpArgs::from_args(args).await.map(|cfg| Ok(Args::Help(cfg)))?,

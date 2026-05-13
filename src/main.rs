@@ -1,5 +1,5 @@
 use burst::cmds::{command, help::HelpCommand};
-use burst::tools::cmderror::CmdError::MissingCommand;
+use burst::tools::error::Error::MissingCommand;
 use std::{env, process::exit};
 
 #[tokio::main]

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Local, NaiveDate};
 
 use crate::args::backupconfig::BackupConfig;
-use crate::tools::cmderror::CmdError;
+use crate::tools::error::Error;
 use crate::tools::fs::FileSystem;
 use std::fmt;
 use std::string::String;
@@ -53,9 +53,9 @@ impl fmt::Display for DeleteArgs {
 }
 
 impl DeleteArgs {
-    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, Error> {
         if args.len() < MIN_PARAMS {
-            return Err(CmdError::InvalidParameters);
+            return Err(Error::InvalidParameters);
         }
         let mut params = DeleteArgs::default();
         params.exe.push_str(&args[0]);
@@ -68,24 +68,21 @@ impl DeleteArgs {
                         for id in ids {
                             match id.parse::<u64>() {
                                 Ok(sid) => params.sids.push(sid),
-                                Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                                Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                             }
                         }
                     } else if args[n + 1].contains('-') {
                         if let Some(sep) = args[n + 1].rfind('-') {
                             let start = match args[n + 1][..sep].parse::<u64>() {
                                 Ok(sid) => sid,
-                                Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                                Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                             };
                             let end = match args[n + 1][sep + 1..].parse::<u64>() {
                                 Ok(sid) => sid,
-                                Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                                Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                             };
                             if start >= end {
-                                return Err(CmdError::InvalidOption(format!(
-                                    "start ({}) must be strictly lower than end ({})",
-                                    start, end
-                                )));
+                                return Err(Error::InvalidOption(format!("start ({}) must be strictly lower than end ({})", start, end)));
                             }
                             for sid in start..end + 1 {
                                 params.sids.push(sid);
@@ -94,7 +91,7 @@ impl DeleteArgs {
                     } else {
                         match args[n + 1].parse::<u64>() {
                             Ok(sid) => params.sids.push(sid),
-                            Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                            Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                         }
                     }
                     n += 1;
@@ -104,14 +101,14 @@ impl DeleteArgs {
                         Ok(date) => {
                             params.older_than = date.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(Local).unwrap();
                         }
-                        Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                        Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                     }
                     n += 1;
                 }
                 "--keep-last" | "-l" => {
                     match args[n + 1].parse::<u64>() {
                         Ok(last) => params.keep_last = last,
-                        Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                        Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                     }
                     n += 1;
                 }
@@ -124,7 +121,7 @@ impl DeleteArgs {
                 "--dry-run" | "-n" => params.dry_run = true,
                 _ => {
                     if args[n].starts_with("--") {
-                        return Err(CmdError::InvalidParameter(args[n].clone()));
+                        return Err(Error::InvalidParameter(args[n].clone()));
                     }
                 }
             }
@@ -133,7 +130,7 @@ impl DeleteArgs {
         if !args[args.len() - 1].starts_with("--") {
             match FileSystem::canonicalize(&args[args.len() - 1]).await {
                 Ok(target) => params.config.target = target,
-                Err(_) => return Err(CmdError::InvalidBackupDirectory()),
+                Err(_) => return Err(Error::InvalidBackupDirectory()),
             }
         }
         if params.dry_run {

@@ -1,5 +1,5 @@
-use crate::tools::cmderror::CmdError;
 use crate::tools::db::Database;
+use crate::tools::error::Error;
 use crate::tools::fmt::{human_readable_duration, human_readable_size};
 use chrono::{DateTime, Local};
 use sqlx::query::Query;
@@ -75,53 +75,53 @@ impl Snapshot {
         //      date               status  duration  excluded  total\t\t\tnew\t\t\tmodified\t\tunchanged\t\tdeleted");
     }
 
-    pub async fn get_latest(db: &Database) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get_latest(db: &Database) -> Result<Option<Snapshot>, Error> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE deleted=0 ORDER BY created DESC LIMIT 1");
         Snapshot::one(db, &sql, |q| q).await
     }
 
-    pub async fn get_previous(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get_previous(db: &Database, id: u64) -> Result<Option<Snapshot>, Error> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE deleted=0 AND id<?1 ORDER BY created DESC LIMIT 1");
         Snapshot::one(db, &sql, |q| q.bind(id as i64)).await
     }
 
-    pub async fn get_previous_sync_mode(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get_previous_sync_mode(db: &Database, id: u64) -> Result<Option<Snapshot>, Error> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id<?1 ORDER BY created DESC LIMIT 1");
         Snapshot::one(db, &sql, |q| q.bind(id as i64)).await
     }
 
-    pub async fn get(db: &Database, id: u64) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get(db: &Database, id: u64) -> Result<Option<Snapshot>, Error> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id=?1");
         Snapshot::one(db, &sql, |q| q.bind(id as i64)).await
     }
 
-    pub async fn get_in_progress(db: &Database) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn get_in_progress(db: &Database) -> Result<Option<Snapshot>, Error> {
         Snapshot::one(db, READ_IN_PROGRESS, |q| q).await
     }
 
-    pub async fn get_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, CmdError> {
+    pub async fn get_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, Error> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id!=0 ORDER BY created DESC LIMIT ?1");
         Snapshot::list(db, &sql, |q| q.bind(limit as i64)).await
     }
 
-    pub async fn get_except_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, CmdError> {
+    pub async fn get_except_last(db: &Database, limit: u64) -> Result<Vec<Snapshot>, Error> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id!=0 AND id NOT IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT ?1) ORDER BY created DESC");
         Snapshot::list(db, &sql, |q| q.bind(limit as i64)).await
     }
 
-    pub async fn get_before(db: &Database, date: DateTime<Local>) -> Result<Vec<Snapshot>, CmdError> {
+    pub async fn get_before(db: &Database, date: DateTime<Local>) -> Result<Vec<Snapshot>, Error> {
         let mut sql = String::from(READ);
         sql.push_str(" WHERE id!=0 AND id IN (SELECT id FROM snapshots WHERE created<?1) ORDER BY created DESC");
         Snapshot::list(db, &sql, |q| q.bind(date)).await
     }
 
-    pub async fn insert_next(db: &Database) -> Result<Option<Snapshot>, CmdError> {
+    pub async fn insert_next(db: &Database) -> Result<Option<Snapshot>, Error> {
         if let Some(snapshot) = Snapshot::one(db, INSERT, |q| q).await? {
             db.execute(IP_INSERT, |q| q.bind(snapshot.id as i64)).await?;
             return Ok(Some(snapshot));
@@ -129,7 +129,7 @@ impl Snapshot {
         Ok(None)
     }
 
-    pub async fn update(&self, db: &Database) -> Result<(), CmdError> {
+    pub async fn update(&self, db: &Database) -> Result<(), Error> {
         db.execute(UPDATE, |q| {
             q.bind(self.id as i64)
                 .bind(self.duration.as_secs() as i64)
@@ -151,29 +151,29 @@ impl Snapshot {
         .await
     }
 
-    pub async fn mark_completed(&self, db: &Database) -> Result<(), CmdError> {
+    pub async fn mark_completed(&self, db: &Database) -> Result<(), Error> {
         self.update(db).await?;
         db.execute(DELETE_IN_PROGRESS, |q| q.bind(self.id as i64)).await
     }
 
-    pub async fn delete(&self, db: &Database) -> Result<(), CmdError> {
+    pub async fn delete(&self, db: &Database) -> Result<(), Error> {
         Snapshot::delete_by_id(db, self.id).await
     }
 
-    pub async fn delete_by_id(db: &Database, id: u64) -> Result<(), CmdError> {
+    pub async fn delete_by_id(db: &Database, id: u64) -> Result<(), Error> {
         let mut sql = String::from(DELETE);
         sql.push_str(" WHERE id=?1");
         db.execute(&sql, |q| q.bind(id as i64)).await?;
         db.execute(DELETE_IN_PROGRESS, |q| q.bind(id as i64)).await
     }
 
-    pub async fn delete_all_except(&self, db: &Database) -> Result<(), CmdError> {
+    pub async fn delete_all_except(&self, db: &Database) -> Result<(), Error> {
         let mut sql = String::from(DELETE);
         sql.push_str(" WHERE id!=?1");
         db.execute(&sql, |q| q.bind(self.id as i64)).await
     }
 
-    async fn list<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Vec<Snapshot>, CmdError>
+    async fn list<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Vec<Snapshot>, Error>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
@@ -202,7 +202,7 @@ impl Snapshot {
         .await
     }
 
-    async fn one<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Option<Snapshot>, CmdError>
+    async fn one<'a, B>(db: &Database, sql: &'a str, bind: B) -> Result<Option<Snapshot>, Error>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {

@@ -3,8 +3,8 @@ use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::file::File;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
 use crate::tools::db::Database;
+use crate::tools::error::Error::{self, InvalidBackupDirectory, InvalidOption};
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
 use chrono::Datelike;
@@ -30,7 +30,7 @@ impl From<DeleteArgs> for DeleteCommand {
 }
 
 impl Command for DeleteCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
+    fn validate(&mut self) -> Result<(), Error> {
         if self.args.sids.is_empty() && self.args.keep_last == 0 && self.args.older_than.year() != 1970 {
             return Err(InvalidOption(String::from("Missing snapshot selector")));
         }
@@ -59,7 +59,7 @@ impl Command for DeleteCommand {
         println!("\toffice folder and its content:\t\t--pattern: \"/?office(/.*)?$\"");
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             let start = Instant::now();
             if self.args.verbose {
@@ -69,7 +69,7 @@ impl Command for DeleteCommand {
             match command::start(&self.args.config.target).await {
                 Ok(_) => (),
                 Err(err) => match err {
-                    CmdError::NoRemote() => {
+                    Error::NoRemote() => {
                         if !self.args.dry_run {
                             return Err(InvalidBackupDirectory());
                         }
@@ -109,19 +109,19 @@ impl Command for DeleteCommand {
 }
 
 impl DeleteCommand {
-    async fn unarchive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
+    async fn unarchive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), Error> {
         file.deleted_sid = 0;
         file.unarchive(db).await?;
         fs.unarchive_file(snapshot.id, file).await
     }
 
-    async fn unarchive_dir(&self, db: &Database, fs: &FileSystem, dir: &mut File) -> Result<(), CmdError> {
+    async fn unarchive_dir(&self, db: &Database, fs: &FileSystem, dir: &mut File) -> Result<(), Error> {
         dir.deleted_sid = 0;
         dir.unarchive(db).await?;
         fs.remove_archive_dir(dir).await
     }
 
-    async fn clean_up(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn clean_up(&self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         let dirs = File::filesystem_dirs(db).await?;
         for dir in &dirs {
             if !fs.exists(dir, &self.args.config.target).await? {
@@ -135,7 +135,7 @@ impl DeleteCommand {
         Ok(())
     }
 
-    async fn delete_history_incremental(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn delete_history_incremental(&self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         for sid in &self.args.sids {
             if !self.args.quiet {
                 println!("Deleting snapshot {} files", *sid);
@@ -186,7 +186,7 @@ impl DeleteCommand {
         Ok(())
     }
 
-    async fn delete_history_non_incremental(&self, db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn delete_history_non_incremental(&self, db: &Database, _fs: &FileSystem) -> Result<(), Error> {
         for sid in &self.args.sids {
             if !self.args.quiet {
                 println!("Deleting snapshot {} files", *sid);

@@ -2,9 +2,9 @@ use crate::args::backup::BackupArgs;
 use crate::cmds::command::{self, Command};
 use crate::cmds::file::{Directory, File};
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
-use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
+use crate::tools::error::Error::{self, InvalidBackupDirectory, InvalidOption};
+use crate::tools::error::IoError;
 use crate::tools::fs::FileSystem;
 use chrono::{DateTime, Local};
 use std::boxed::Box;
@@ -24,7 +24,7 @@ struct Statistics {
     pub has_files: bool,
 }
 
-type ReadDirectoryResult = Result<(Directory, Statistics), CmdError>;
+type ReadDirectoryResult = Result<(Directory, Statistics), Error>;
 
 #[derive(Default)]
 struct TreeDiff {
@@ -55,7 +55,7 @@ impl From<BackupArgs> for BackupCommand {
 }
 
 impl Command for BackupCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
+    fn validate(&mut self) -> Result<(), Error> {
         Ok(())
     }
 
@@ -71,7 +71,7 @@ impl Command for BackupCommand {
         println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             let start = Instant::now();
             if self.args.verbose {
@@ -81,7 +81,7 @@ impl Command for BackupCommand {
             match command::start(&self.args.config.target).await {
                 Ok(_) => (),
                 Err(err) => match err {
-                    CmdError::NoRemote() => {
+                    Error::NoRemote() => {
                         if !self.args.dry_run {
                             return Err(InvalidBackupDirectory());
                         }
@@ -165,44 +165,44 @@ impl BackupCommand {
     // case (rename failed after DB update) is recovered by --continue via an extra fs.exists() check
     // in process_deleted_file: archive_exists()=true but fs.exists()=false → retries the rename.
 
-    async fn insert_new_file(args: &Arc<BackupArgs>, db: &Database, fs: &FileSystem, sid: u64, mut file: File) -> Result<File, CmdError> {
+    async fn insert_new_file(args: &Arc<BackupArgs>, db: &Database, fs: &FileSystem, sid: u64, mut file: File) -> Result<File, Error> {
         file.digest = fs.compute_digest(&file, &args.config.source).await?;
         fs.copy_new_file(&file, args.config.hash_comparison).await?;
         file.insert(db, sid).await?;
         Ok(file)
     }
 
-    async fn insert_unchanged_file(db: &Database, _fs: &FileSystem, sid: u64, file: &File) -> Result<(), CmdError> {
+    async fn insert_unchanged_file(db: &Database, _fs: &FileSystem, sid: u64, file: &File) -> Result<(), Error> {
         file.insert_ref(db, sid).await
     }
 
-    async fn archive_file(db: &Database, fs: &FileSystem, sid: u64, file: &mut File) -> Result<(), CmdError> {
+    async fn archive_file(db: &Database, fs: &FileSystem, sid: u64, file: &mut File) -> Result<(), Error> {
         file.archive(db, sid).await?;
         fs.archive_file(sid, file).await
     }
 
-    async fn archive_dir(db: &Database, _fs: &FileSystem, sid: u64, dir: &mut File) -> Result<(), CmdError> {
+    async fn archive_dir(db: &Database, _fs: &FileSystem, sid: u64, dir: &mut File) -> Result<(), Error> {
         dir.archive(db, sid).await
     }
 
-    async fn remove_previous_file(db: &Database, _fs: &FileSystem, previous_file: &File, file: &File) -> Result<(), CmdError> {
+    async fn remove_previous_file(db: &Database, _fs: &FileSystem, previous_file: &File, file: &File) -> Result<(), Error> {
         previous_file.update_ref(db, file).await?;
         previous_file.delete(db).await
     }
 
-    async fn remove_file(db: &Database, fs: &FileSystem, file: &File) -> Result<(), CmdError> {
+    async fn remove_file(db: &Database, fs: &FileSystem, file: &File) -> Result<(), Error> {
         file.delete_ref(db).await?;
         file.delete(db).await?;
         fs.remove_file(file).await
     }
 
-    async fn remove_dir(db: &Database, fs: &FileSystem, dir: &File) -> Result<(), CmdError> {
+    async fn remove_dir(db: &Database, fs: &FileSystem, dir: &File) -> Result<(), Error> {
         dir.delete_ref(db).await?;
         dir.delete(db).await?;
         fs.remove_dir(dir).await
     }
 
-    async fn do_backup(&self, db: Arc<Database>, snapshot: &mut Snapshot) -> Result<(), CmdError> {
+    async fn do_backup(&self, db: Arc<Database>, snapshot: &mut Snapshot) -> Result<(), Error> {
         let args = Arc::new(self.args.clone());
         let (dir, statistics) = Self::read_source(Arc::clone(&args), self.previous_snapshot.id, self.args.config.source.clone()).await?;
         if !statistics.has_files && !self.args.quiet {
@@ -227,13 +227,12 @@ impl BackupCommand {
             }
             let mut subdirs: Vec<PathBuf> = vec![];
             let mut files = HashSet::new();
-            let mut entries = tokio::fs::read_dir(root.clone())
-                .await
-                .map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
-            let root_metadata = tokio::fs::symlink_metadata(&root).await.map_err(|err| CmdError::IoError(IoError::from(&root, err)))?;
-            while let Some(entry) = entries.next_entry().await.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))? {
+            let mut entries =
+                tokio::fs::read_dir(root.clone()).await.map_err(|err| Error::IoError(IoError::from_str("Cannot iterate entries", err)))?;
+            let root_metadata = tokio::fs::symlink_metadata(&root).await.map_err(|err| Error::IoError(IoError::from(&root, err)))?;
+            while let Some(entry) = entries.next_entry().await.map_err(|err| Error::IoError(IoError::from_str("Invalid entry", err)))? {
                 let p = entry.path();
-                let metadata = tokio::fs::symlink_metadata(&p).await.map_err(|err| CmdError::IoError(IoError::from(&p, err)))?;
+                let metadata = tokio::fs::symlink_metadata(&p).await.map_err(|err| Error::IoError(IoError::from(&p, err)))?;
                 if !args.config.follow_symlinks && metadata.is_symlink() {
                     if args.verbose {
                         println!("  Excluded symlink {:?}", entry.file_name())
@@ -260,7 +259,7 @@ impl BackupCommand {
                 }
                 statistics.has_files = true;
                 files.insert(File::from_metadata(
-                    p.strip_prefix(&args.config.source).map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
+                    p.strip_prefix(&args.config.source).map_err(|_| Error::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                     metadata,
                 ));
             }
@@ -270,7 +269,7 @@ impl BackupCommand {
             }
             let mut children = HashSet::new();
             while let Some(dir) = set.join_next().await {
-                let (dir, stats) = dir.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                let (dir, stats) = dir.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
                 statistics.dirs += stats.dirs;
                 statistics.excl_dirs += stats.excl_dirs;
                 statistics.excl_files += stats.excl_files;
@@ -281,7 +280,7 @@ impl BackupCommand {
                 Directory::from_parts(
                     File::from_metadata(
                         root.strip_prefix(&args.config.source)
-                            .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
+                            .map_err(|_| Error::GenericError(format!("Cannot strip prefix: {:?}", root)))?,
                         root_metadata,
                     ),
                     files,
@@ -324,7 +323,7 @@ impl BackupCommand {
         Self::recurse_build_directory(by_path, file)
     }
 
-    async fn read_previous_source(psid: u64, db: &Database) -> Result<Directory, CmdError> {
+    async fn read_previous_source(psid: u64, db: &Database) -> Result<Directory, Error> {
         let entries = File::all_entries(db, psid).await?;
         let mut by_path: HashMap<PathBuf, Vec<File>> = HashMap::new();
         for entry in entries {
@@ -366,7 +365,7 @@ impl BackupCommand {
 
     async fn process_new_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<File>,
-    ) -> Result<(), CmdError> {
+    ) -> Result<(), Error> {
         let mut set = JoinSet::new();
         for file in files {
             if args.verbose || psid != 0 {
@@ -383,14 +382,14 @@ impl BackupCommand {
             }
         }
         while let Some(result) = set.join_next().await {
-            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+            result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
 
     async fn process_modified_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<(File, File)>,
-    ) -> Result<(), CmdError> {
+    ) -> Result<(), Error> {
         let mut set = JoinSet::new();
         for (mut previous_file, file) in files {
             if args.verbose || psid != 0 {
@@ -415,14 +414,14 @@ impl BackupCommand {
             }
         }
         while let Some(result) = set.join_next().await {
-            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+            result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
 
     async fn process_unchanged_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, _psid: u64, sid: u64, files: Vec<File>,
-    ) -> Result<(), CmdError> {
+    ) -> Result<(), Error> {
         let mut set = JoinSet::new();
         for previous_file in files {
             if !args.dry_run {
@@ -438,14 +437,14 @@ impl BackupCommand {
             }
         }
         while let Some(result) = set.join_next().await {
-            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+            result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
 
     async fn process_deleted_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<File>,
-    ) -> Result<(), CmdError> {
+    ) -> Result<(), Error> {
         let mut set = JoinSet::new();
         for mut file in files {
             file.deleted_sid = sid;
@@ -469,14 +468,14 @@ impl BackupCommand {
             }
         }
         while let Some(result) = set.join_next().await {
-            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+            result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
 
     async fn process_unchanged_dirs(
         args: &Arc<BackupArgs>, db: &Arc<Database>, _: &Arc<FileSystem>, _psid: u64, sid: u64, dirs: Vec<File>,
-    ) -> Result<(), CmdError> {
+    ) -> Result<(), Error> {
         let mut set = JoinSet::new();
         for dir in dirs {
             if !args.dry_run {
@@ -491,14 +490,14 @@ impl BackupCommand {
             }
         }
         while let Some(result) = set.join_next().await {
-            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+            result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
 
     async fn process_new_dirs(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, dirs: Vec<Directory>,
-    ) -> Result<(), CmdError> {
+    ) -> Result<(), Error> {
         let mut set = JoinSet::new();
         for dir in dirs {
             let args = Arc::clone(args);
@@ -510,14 +509,14 @@ impl BackupCommand {
             });
         }
         while let Some(result) = set.join_next().await {
-            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+            result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
 
     async fn process_deleted_dirs(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, dirs: Vec<Directory>,
-    ) -> Result<(), CmdError> {
+    ) -> Result<(), Error> {
         let mut set = JoinSet::new();
         for dir in dirs {
             let args = Arc::clone(args);
@@ -529,14 +528,14 @@ impl BackupCommand {
             });
         }
         while let Some(result) = set.join_next().await {
-            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+            result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
 
     fn process_new_dir<'a>(
         args: &'a Arc<BackupArgs>, db: &'a Arc<Database>, fs: &'a Arc<FileSystem>, psid: u64, sid: u64, mut dir: Directory,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
         Box::pin(async move {
             if !args.dry_run && (!args.cont || !dir.entry.exists(db, sid).await?) {
                 dir.entry.insert(db, sid).await?;
@@ -555,7 +554,7 @@ impl BackupCommand {
                     });
                 }
                 while let Some(result) = set.join_next().await {
-                    result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                    result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
                 }
                 Ok(())
             },)?;
@@ -565,7 +564,7 @@ impl BackupCommand {
 
     fn process_deleted_dir<'a>(
         args: &'a Arc<BackupArgs>, db: &'a Arc<Database>, fs: &'a Arc<FileSystem>, psid: u64, sid: u64, mut dir: Directory,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
         Box::pin(async move {
             if args.verbose || psid != 0 {
                 println!("Deleted dir {:?}", dir.entry.fullname())
@@ -584,7 +583,7 @@ impl BackupCommand {
                     });
                 }
                 while let Some(result) = set.join_next().await {
-                    result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                    result.map_err(|_| Error::GenericError(String::from("Cannot join tokio tasks")))??;
                 }
                 Ok(())
             },)?;
@@ -628,7 +627,7 @@ impl BackupCommand {
         }
     }
 
-    async fn compute_tree(args: &Arc<BackupArgs>, db: Arc<Database>, psid: u64, sid: u64, diff: TreeDiff) -> Result<(), CmdError> {
+    async fn compute_tree(args: &Arc<BackupArgs>, db: Arc<Database>, psid: u64, sid: u64, diff: TreeDiff) -> Result<(), Error> {
         let fs = Arc::new(FileSystem::new(&args.config.source, &args.config.target));
         tokio::try_join!(
             Self::process_new_files(args, &db, &fs, psid, sid, diff.file_added),

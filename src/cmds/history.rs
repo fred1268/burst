@@ -2,8 +2,8 @@ use crate::args::history::HistoryArgs;
 use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError;
 use crate::tools::db::Database;
+use crate::tools::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -24,7 +24,7 @@ impl From<HistoryArgs> for HistoryCommand {
 }
 
 impl Command for HistoryCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
+    fn validate(&mut self) -> Result<(), Error> {
         Ok(())
     }
 
@@ -39,7 +39,7 @@ impl Command for HistoryCommand {
         println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             if self.args.verbose {
                 println!("history command started");
@@ -48,7 +48,7 @@ impl Command for HistoryCommand {
             match command::start(&self.args.config.target).await {
                 Ok(_) => (),
                 Err(err) => match err {
-                    CmdError::NoRemote() => (),
+                    Error::NoRemote() => (),
                     _ => return Err(err),
                 },
             };

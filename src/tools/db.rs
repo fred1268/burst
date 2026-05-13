@@ -1,5 +1,5 @@
 use crate::cmds::constants::BURST_METADATA_FILE;
-use crate::tools::cmderror::{CmdError, DbError};
+use crate::tools::error::{DbError, Error};
 use crate::tools::fs::FileSystem;
 use crate::tools::version::VERSION_1_1;
 use sqlx::query::Query;
@@ -39,19 +39,19 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn open(target: &Path) -> Result<Database, CmdError> {
+    pub async fn open(target: &Path) -> Result<Database, Error> {
         let home_dir = FileSystem::home_backup_dir(target);
         let db_file = home_dir.join(BURST_METADATA_FILE);
         let opts =
             SqliteConnectOptions::new().filename(&db_file).journal_mode(SqliteJournalMode::Wal).busy_timeout(Duration::from_millis(5000));
-        let pool = SqlitePool::connect_with(opts).await.map_err(|err| CmdError::DbError(DbError::from("Cannot open database", err)))?;
+        let pool = SqlitePool::connect_with(opts).await.map_err(|err| Error::DbError(DbError::from("Cannot open database", err)))?;
         let db = Database { pool };
         db.check_tables().await?;
         db.upgrade().await?;
         Ok(db)
     }
 
-    async fn check_tables(&self) -> Result<(), CmdError> {
+    async fn check_tables(&self) -> Result<(), Error> {
         if !self.exists(TABLE_EXISTS, |q| q.bind("inprogress")).await? {
             self.execute(IP_TABLE, |q| q).await?;
         }
@@ -75,50 +75,50 @@ impl Database {
         Ok(())
     }
 
-    pub async fn exists<'a, B>(&self, sql: &'a str, bind: B) -> Result<bool, CmdError>
+    pub async fn exists<'a, B>(&self, sql: &'a str, bind: B) -> Result<bool, Error>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         Ok(row.is_some())
     }
 
-    pub async fn execute<'a, B>(&self, sql: &'a str, bind: B) -> Result<(), CmdError>
+    pub async fn execute<'a, B>(&self, sql: &'a str, bind: B) -> Result<(), Error>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        bind(sqlx::query(sql)).execute(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        bind(sqlx::query(sql)).execute(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         Ok(())
     }
 
-    pub async fn query_one<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Option<T>, CmdError>
+    pub async fn query_one<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Option<T>, Error>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
         F: FnOnce(SqliteRow) -> Result<T, sqlx::Error>,
     {
-        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
+        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         match row {
-            Some(r) => Ok(Some(f(r).map_err(|err| CmdError::DbError(DbError::from(sql, err)))?)),
+            Some(r) => Ok(Some(f(r).map_err(|err| Error::DbError(DbError::from(sql, err)))?)),
             None => Ok(None),
         }
     }
 
-    pub async fn query_list<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Vec<T>, CmdError>
+    pub async fn query_list<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Vec<T>, Error>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
         F: Fn(SqliteRow) -> Result<T, sqlx::Error>,
     {
-        let rows = bind(sqlx::query(sql)).fetch_all(&self.pool).await.map_err(|err| CmdError::DbError(DbError::from(sql, err)))?;
-        rows.into_iter().map(|r| f(r).map_err(|err| CmdError::DbError(DbError::from(sql, err)))).collect()
+        let rows = bind(sqlx::query(sql)).fetch_all(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
+        rows.into_iter().map(|r| f(r).map_err(|err| Error::DbError(DbError::from(sql, err)))).collect()
     }
 
-    async fn upgrade(&self) -> Result<(), CmdError> {
+    async fn upgrade(&self) -> Result<(), Error> {
         loop {
             let v: Option<String> = self.query_one(VER_READ, |q| q, |row| row.try_get(0)).await?;
             let version = match v {
                 Some(v) => v,
                 None => {
-                    return Err(CmdError::GenericError(String::from("Cannot upgrade database: version not found")));
+                    return Err(Error::GenericError(String::from("Cannot upgrade database: version not found")));
                 }
             };
             match version.as_str() {
@@ -130,13 +130,13 @@ impl Database {
         Ok(())
     }
 
-    async fn upgrade_to_1_1(&self) -> Result<(), CmdError> {
+    async fn upgrade_to_1_1(&self) -> Result<(), Error> {
         self.execute(FH_TABLE, |q| q).await?;
         self.execute("INSERT INTO filehistory SELECT id, snapshot_id, digest, path, archive, name, size, compressed_size, encrypted, created, modified, deleted_sid, is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.version_id WHERE sf.snapshot_id IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT 1)", |q| q).await?;
         self.execute(VER_UPDATE, |q| q.bind(VERSION_1_1)).await
     }
 
-    async fn upgrade_to_x_y(&self) -> Result<(), CmdError> {
+    async fn upgrade_to_x_y(&self) -> Result<(), Error> {
         // upgrade code here
 
         // self.execute(sqlx::query(VER_UPDATE).bind(VERSION_x_y)).await

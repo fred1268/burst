@@ -1,8 +1,8 @@
-use std::fmt::{Display, Formatter, Result};
+use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
-pub enum CmdError {
+pub enum Error {
     GenericError(String),
     IoError(IoError),
     DbError(DbError),
@@ -17,8 +17,8 @@ pub enum CmdError {
     NoRemote(),
 }
 
-impl Display for CmdError {
-    fn fmt(&self, f: &mut Formatter) -> Result {
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             Self::GenericError(msg) => write!(f, "{}", msg),
             Self::IoError(err) => write!(f, "{}", err),
@@ -36,7 +36,7 @@ impl Display for CmdError {
     }
 }
 
-impl std::error::Error for CmdError {}
+impl std::error::Error for Error {}
 
 #[derive(Debug)]
 pub struct DbError {
@@ -45,7 +45,7 @@ pub struct DbError {
 }
 
 impl Display for DbError {
-    fn fmt(&self, f: &mut Formatter) -> Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{}: {}", self.culprit, self.source)
     }
 }
@@ -63,7 +63,7 @@ pub struct IoError {
 }
 
 impl Display for IoError {
-    fn fmt(&self, f: &mut Formatter) -> Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "{:?}: {}", self.culprit, self.source)
     }
 }
