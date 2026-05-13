@@ -5,6 +5,7 @@ use crate::tools::version::VERSION_1_1;
 use sqlx::query::Query;
 use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{Row, Sqlite, SqlitePool};
+use sqlx::sqlite::SqlitePoolOptions;
 use std::path::Path;
 use std::time::Duration;
 
@@ -44,7 +45,11 @@ impl Database {
         let db_file = home_dir.join(BURST_METADATA_FILE);
         let opts =
             SqliteConnectOptions::new().filename(&db_file).journal_mode(SqliteJournalMode::Wal).busy_timeout(Duration::from_millis(5000));
-        let pool = SqlitePool::connect_with(opts).await.map_err(|err| Error::DbError(DbError::from("Cannot open database", err)))?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .map_err(|err| Error::DbError(DbError::from("Cannot open database", err)))?;
         let db = Database { pool };
         db.check_tables().await?;
         db.upgrade().await?;
