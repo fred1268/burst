@@ -90,7 +90,7 @@ impl Command for BackupCommand {
                 },
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
-            let db = Database::open(&self.args.config.target).await?;
+            let db = Arc::new(Database::open(&self.args.config.target).await?);
             let mut snapshot = match self.args.dry_run {
             true => Some(Snapshot::default()),
             false => match self.args.cont {
@@ -118,7 +118,7 @@ impl Command for BackupCommand {
                 self.previous_snapshot = ps;
             }
 
-            self.do_backup(&db, &mut snapshot).await?;
+            self.do_backup(db.clone(), &mut snapshot).await?;
 
             if !self.args.dry_run && !self.args.config.incremental {
                 File::delete_all(&db, self.previous_snapshot.id).await?;
@@ -165,63 +165,63 @@ impl BackupCommand {
     // case (rename failed after DB update) is recovered by --continue via an extra fs.exists() check
     // in process_deleted_file: archive_exists()=true but fs.exists()=false → retries the rename.
 
-    async fn insert_new_file(&self, db: &Database, fs: &FileSystem, sid: u64, file: &mut File) -> Result<(), CmdError> {
-        file.digest = fs.compute_digest(file, &self.args.config.source).await?;
-        fs.copy_new_file(file, self.args.config.hash_comparison).await?;
+    async fn insert_new_file(args: &Arc<BackupArgs>, db: &Database, fs: &FileSystem, sid: u64, file: &mut File) -> Result<(), CmdError> {
+        file.digest = fs.compute_digest(file, &args.config.source).await?;
+        fs.copy_new_file(file, args.config.hash_comparison).await?;
         file.insert(db, sid).await
     }
 
-    async fn insert_unchanged_file(&self, db: &Database, _fs: &FileSystem, sid: u64, file: &File) -> Result<(), CmdError> {
+    async fn insert_unchanged_file(db: &Database, _fs: &FileSystem, sid: u64, file: &File) -> Result<(), CmdError> {
         file.insert_ref(db, sid).await
     }
 
-    async fn archive_file(&self, db: &Database, fs: &FileSystem, sid: u64, file: &mut File) -> Result<(), CmdError> {
+    async fn archive_file(db: &Database, fs: &FileSystem, sid: u64, file: &mut File) -> Result<(), CmdError> {
         file.archive(db, sid).await?;
         fs.archive_file(sid, file).await
     }
 
-    async fn archive_dir(&self, db: &Database, _fs: &FileSystem, sid: u64, dir: &mut File) -> Result<(), CmdError> {
+    async fn archive_dir(db: &Database, _fs: &FileSystem, sid: u64, dir: &mut File) -> Result<(), CmdError> {
         dir.archive(db, sid).await
     }
 
-    async fn remove_previous_file(&self, db: &Database, _fs: &FileSystem, previous_file: &File, file: &File) -> Result<(), CmdError> {
+    async fn remove_previous_file(db: &Database, _fs: &FileSystem, previous_file: &File, file: &File) -> Result<(), CmdError> {
         previous_file.update_ref(db, file).await?;
         previous_file.delete(db).await
     }
 
-    async fn remove_file(&self, db: &Database, fs: &FileSystem, file: &File) -> Result<(), CmdError> {
+    async fn remove_file(db: &Database, fs: &FileSystem, file: &File) -> Result<(), CmdError> {
         file.delete_ref(db).await?;
         file.delete(db).await?;
         fs.remove_file(file).await
     }
 
-    async fn remove_dir(&self, db: &Database, fs: &FileSystem, dir: &File) -> Result<(), CmdError> {
+    async fn remove_dir(db: &Database, fs: &FileSystem, dir: &File) -> Result<(), CmdError> {
         dir.delete_ref(db).await?;
         dir.delete(db).await?;
         fs.remove_dir(dir).await
     }
 
-    async fn do_backup(&self, db: &Database, snapshot: &mut Snapshot) -> Result<(), CmdError> {
-        let (dir, statistics) =
-            Self::read_source(Arc::new(self.args.clone()), self.previous_snapshot.id, self.args.config.source.clone()).await?;
+    async fn do_backup(&self, db: Arc<Database>, snapshot: &mut Snapshot) -> Result<(), CmdError> {
+        let args = Arc::new(self.args.clone());
+        let (dir, statistics) = Self::read_source(Arc::clone(&args), self.previous_snapshot.id, self.args.config.source.clone()).await?;
         if !statistics.has_files && !self.args.quiet {
             println!("Warning: backup is empty");
         }
         snapshot.dirs = statistics.dirs;
         snapshot.excluded_dirs = statistics.excl_dirs;
         snapshot.excluded_files = statistics.excl_files;
-        let prev_dir = self.read_previous_source(db).await?;
-        let diff = self.compare_tree(dir, prev_dir);
-        self.compute_statistics(snapshot, &diff);
-        self.compute_tree(db, snapshot.id, diff).await?;
+        let prev_dir = Self::read_previous_source(self.previous_snapshot.id, &db).await?;
+        let diff = Self::compare_tree(dir, prev_dir);
+        Self::compute_statistics(snapshot, &diff);
+        Self::compute_tree(&args, db, self.previous_snapshot.id, snapshot.id, diff).await?;
         Ok(())
     }
 
-    fn read_source(args: Arc<BackupArgs>, pid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
+    fn read_source(args: Arc<BackupArgs>, psid: u64, root: PathBuf) -> Pin<Box<dyn Future<Output = ReadDirectoryResult> + Send + 'static>> {
         Box::pin(async move {
             let mut statistics = Statistics::default();
             statistics.dirs += 1;
-            if !args.quiet && pid == 0 {
+            if !args.quiet && psid == 0 {
                 println!("Directory {:?}", root);
             }
             let mut subdirs: Vec<PathBuf> = vec![];
@@ -265,7 +265,7 @@ impl BackupCommand {
             }
             let mut set = JoinSet::new();
             for subdir in subdirs {
-                set.spawn(Self::read_source(Arc::clone(&args), pid, subdir));
+                set.spawn(Self::read_source(Arc::clone(&args), psid, subdir));
             }
             let mut children = HashSet::new();
             while let Some(dir) = set.join_next().await {
@@ -291,13 +291,13 @@ impl BackupCommand {
         })
     }
 
-    fn recurse_build_directory(&self, by_path: &mut HashMap<PathBuf, Vec<File>>, entry: File) -> Directory {
+    fn recurse_build_directory(by_path: &mut HashMap<PathBuf, Vec<File>>, entry: File) -> Directory {
         let entries = by_path.remove(&entry.fullname()).unwrap_or_default();
         let mut files = HashSet::new();
         let mut children = HashSet::new();
         for e in entries {
             if e.is_dir {
-                children.insert(self.recurse_build_directory(by_path, e));
+                children.insert(Self::recurse_build_directory(by_path, e));
             } else {
                 files.insert(e);
             }
@@ -305,7 +305,7 @@ impl BackupCommand {
         Directory { entry, files, children }
     }
 
-    fn build_directory(&self, by_path: &mut HashMap<PathBuf, Vec<File>>) -> Directory {
+    fn build_directory(by_path: &mut HashMap<PathBuf, Vec<File>>) -> Directory {
         let date = DateTime::from_timestamp_secs(0).unwrap();
         let file = File {
             id: 0,
@@ -320,21 +320,19 @@ impl BackupCommand {
             deleted_sid: 0,
             is_dir: true,
         };
-        self.recurse_build_directory(by_path, file)
+        Self::recurse_build_directory(by_path, file)
     }
 
-    async fn read_previous_source(&self, db: &Database) -> Result<Directory, CmdError> {
-        let entries = File::all_entries(db, self.previous_snapshot.id).await?;
+    async fn read_previous_source(psid: u64, db: &Database) -> Result<Directory, CmdError> {
+        let entries = File::all_entries(db, psid).await?;
         let mut by_path: HashMap<PathBuf, Vec<File>> = HashMap::new();
         for entry in entries {
             by_path.entry(entry.path.clone()).or_default().push(entry);
         }
-        Ok(self.build_directory(&mut by_path))
+        Ok(Self::build_directory(&mut by_path))
     }
 
-    fn recurse_compare_tree(
-        &self, src: Directory, mut prev_files: HashSet<File>, mut prev_children: HashSet<Directory>, diff: &mut TreeDiff,
-    ) {
+    fn recurse_compare_tree(src: Directory, mut prev_files: HashSet<File>, mut prev_children: HashSet<Directory>, diff: &mut TreeDiff) {
         for file in src.files {
             if let Some(prev_file) = prev_files.take(&file) {
                 if prev_file.size != file.size || prev_file.modified != file.modified {
@@ -349,7 +347,7 @@ impl BackupCommand {
         diff.file_deleted.extend(prev_files.drain());
         for child in src.children {
             if let Some(Directory { entry: prev_entry, files: prev_files, children: prev_children }) = prev_children.take(&child) {
-                self.recurse_compare_tree(child, prev_files, prev_children, diff);
+                Self::recurse_compare_tree(child, prev_files, prev_children, diff);
                 diff.dir_unchanged.push(prev_entry);
                 continue;
             }
@@ -358,140 +356,158 @@ impl BackupCommand {
         diff.dir_deleted.extend(prev_children.drain());
     }
 
-    fn compare_tree(&self, src: Directory, prev: Directory) -> TreeDiff {
+    fn compare_tree(src: Directory, prev: Directory) -> TreeDiff {
         let mut diff = TreeDiff::default();
         let Directory { entry: _, files: prev_files, children: prev_children } = prev;
-        self.recurse_compare_tree(src, prev_files, prev_children, &mut diff);
+        Self::recurse_compare_tree(src, prev_files, prev_children, &mut diff);
         diff
     }
 
-    async fn process_new_files(&self, db: &Database, fs: &FileSystem, sid: u64, files: Vec<File>) -> Result<(), CmdError> {
+    async fn process_new_files(
+        args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<File>,
+    ) -> Result<(), CmdError> {
+        // let mut set = JoinSet::new();
         for mut file in files {
-            if self.args.verbose || self.previous_snapshot.id != 0 {
+            if args.verbose || psid != 0 {
                 println!("  New file {:?}", file.fullname())
             }
-            if !self.args.dry_run && (!self.args.cont || !file.exists(db, sid).await?) {
-                self.insert_new_file(db, fs, sid, &mut file).await?;
+            if !args.dry_run && (!args.cont || !file.exists(db, sid).await?) {
+                Self::insert_new_file(args, db, fs, sid, &mut file).await?;
             }
         }
+        // while let Some(result) = set.join_next().await {
+        //     result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+        // }
         Ok(())
     }
 
-    async fn process_modified_files(&self, db: &Database, fs: &FileSystem, sid: u64, files: Vec<(File, File)>) -> Result<(), CmdError> {
+    async fn process_modified_files(
+        args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<(File, File)>,
+    ) -> Result<(), CmdError> {
         for (mut previous_file, mut file) in files {
-            if self.args.verbose || self.previous_snapshot.id != 0 {
+            if args.verbose || psid != 0 {
                 println!("  Modified file {:?}", previous_file.fullname())
             }
-            if !self.args.dry_run {
-                if self.args.config.is_incremental(&file.fullname()) {
-                    if !self.args.cont || !file.exists(db, sid).await? {
-                        self.archive_file(db, fs, sid, &mut previous_file).await?;
-                        self.insert_new_file(db, fs, sid, &mut file).await?;
+            if !args.dry_run {
+                if args.config.is_incremental(&file.fullname()) {
+                    if !args.cont || !file.exists(db, sid).await? {
+                        Self::archive_file(db, fs, sid, &mut previous_file).await?;
+                        Self::insert_new_file(args, db, fs, sid, &mut file).await?;
                     }
-                } else if !self.args.cont || !file.exists(db, sid).await? {
-                    self.insert_new_file(db, fs, sid, &mut file).await?;
-                    self.remove_previous_file(db, fs, &previous_file, &file).await?;
+                } else if !args.cont || !file.exists(db, sid).await? {
+                    Self::insert_new_file(args, db, fs, sid, &mut file).await?;
+                    Self::remove_previous_file(db, fs, &previous_file, &file).await?;
                 }
             }
         }
         Ok(())
     }
 
-    async fn process_unchanged_files(&self, db: &Database, fs: &FileSystem, sid: u64, files: Vec<File>) -> Result<(), CmdError> {
+    async fn process_unchanged_files(
+        args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, _psid: u64, sid: u64, files: Vec<File>,
+    ) -> Result<(), CmdError> {
         for previous_file in files {
-            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, sid).await?) {
-                self.insert_unchanged_file(db, fs, sid, &previous_file).await?;
+            if !args.dry_run && (!args.cont || !previous_file.exists(db, sid).await?) {
+                Self::insert_unchanged_file(db, fs, sid, &previous_file).await?;
             }
         }
         Ok(())
     }
 
-    async fn process_deleted_files(&self, db: &Database, fs: &FileSystem, sid: u64, files: Vec<File>) -> Result<(), CmdError> {
+    async fn process_deleted_files(
+        args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<File>,
+    ) -> Result<(), CmdError> {
         for mut file in files {
             file.deleted_sid = sid;
-            if self.args.verbose || self.previous_snapshot.id != 0 {
+            if args.verbose || psid != 0 {
                 println!("  Deleted file {:?}", file.fullname())
             }
-            if !self.args.dry_run {
-                if self.args.config.is_incremental(&file.fullname()) {
-                    if !self.args.cont || !file.archive_exists(db, sid).await? || !fs.exists(&file, &self.args.config.target).await? {
-                        self.archive_file(db, fs, sid, &mut file).await?;
+            if !args.dry_run {
+                if args.config.is_incremental(&file.fullname()) {
+                    if !args.cont || !file.archive_exists(db, sid).await? || !fs.exists(&file, &args.config.target).await? {
+                        Self::archive_file(db, fs, sid, &mut file).await?;
                     }
-                } else if !self.args.cont || file.exists(db, sid).await? {
-                    self.remove_file(db, fs, &file).await?;
+                } else if !args.cont || file.exists(db, sid).await? {
+                    Self::remove_file(db, fs, &file).await?;
                 }
             }
         }
         Ok(())
     }
 
-    async fn process_unchanged_dirs(&self, db: &Database, _: &FileSystem, sid: u64, dirs: Vec<File>) -> Result<(), CmdError> {
+    async fn process_unchanged_dirs(
+        args: &Arc<BackupArgs>, db: &Arc<Database>, _: &Arc<FileSystem>, _psid: u64, sid: u64, dirs: Vec<File>,
+    ) -> Result<(), CmdError> {
         for dir in dirs {
-            if !self.args.dry_run && (!self.args.cont || !dir.exists(db, sid).await?) {
+            if !args.dry_run && (!args.cont || !dir.exists(db, sid).await?) {
                 dir.insert_ref(db, sid).await?;
             }
         }
         Ok(())
     }
 
-    async fn process_new_dirs(&self, db: &Database, fs: &FileSystem, sid: u64, dirs: Vec<Directory>) -> Result<(), CmdError> {
+    async fn process_new_dirs(
+        args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, dirs: Vec<Directory>,
+    ) -> Result<(), CmdError> {
         for dir in dirs {
-            self.process_new_dir(db, fs, sid, dir).await?;
+            Self::process_new_dir(args, db, fs, psid, sid, dir).await?;
         }
         Ok(())
     }
 
-    async fn process_deleted_dirs(&self, db: &Database, fs: &FileSystem, sid: u64, dirs: Vec<Directory>) -> Result<(), CmdError> {
+    async fn process_deleted_dirs(
+        args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, dirs: Vec<Directory>,
+    ) -> Result<(), CmdError> {
         for dir in dirs {
-            self.process_deleted_dir(db, fs, sid, dir).await?;
+            Self::process_deleted_dir(args, db, fs, psid, sid, dir).await?;
         }
         Ok(())
     }
 
     fn process_new_dir<'a>(
-        &'a self, db: &'a Database, fs: &'a FileSystem, sid: u64, mut dir: Directory,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + '_>> {
+        args: &'a Arc<BackupArgs>, db: &'a Arc<Database>, fs: &'a Arc<FileSystem>, psid: u64, sid: u64, mut dir: Directory,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + 'a>> {
         Box::pin(async move {
-            if !self.args.dry_run && (!self.args.cont || !dir.entry.exists(db, sid).await?) {
+            if !args.dry_run && (!args.cont || !dir.entry.exists(db, sid).await?) {
                 dir.entry.insert(db, sid).await?;
             }
             let files: Vec<File> = dir.files.into_iter().collect();
-            self.process_new_files(db, fs, sid, files).await?;
+            Self::process_new_files(args, db, fs, psid, sid, files).await?;
             let dirs: Vec<Directory> = dir.children.into_iter().collect();
             for dir in dirs {
-                self.process_new_dir(db, fs, sid, dir).await?;
+                Self::process_new_dir(args, db, fs, psid, sid, dir).await?;
             }
             Ok(())
         })
     }
 
     fn process_deleted_dir<'a>(
-        &'a self, db: &'a Database, fs: &'a FileSystem, sid: u64, mut dir: Directory,
-    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + '_>> {
+        args: &'a Arc<BackupArgs>, db: &'a Arc<Database>, fs: &'a Arc<FileSystem>, psid: u64, sid: u64, mut dir: Directory,
+    ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + 'a>> {
         Box::pin(async move {
-            if self.args.verbose || self.previous_snapshot.id != 0 {
+            if args.verbose || psid != 0 {
                 println!("Deleted dir {:?}", dir.entry.fullname())
             }
             let files: Vec<File> = dir.files.into_iter().collect();
-            self.process_deleted_files(db, fs, sid, files).await?;
+            Self::process_deleted_files(args, db, fs, psid, sid, files).await?;
             let dirs: Vec<Directory> = dir.children.into_iter().collect();
             for dir in dirs {
-                self.process_deleted_dir(db, fs, sid, dir).await?;
+                Self::process_deleted_dir(args, db, fs, psid, sid, dir).await?;
             }
-            if !self.args.dry_run {
-                if self.args.config.is_incremental(&dir.entry.fullname()) {
-                    if !self.args.cont || !dir.entry.archive_exists(db, sid).await? {
-                        self.archive_dir(db, fs, sid, &mut dir.entry).await?;
+            if !args.dry_run {
+                if args.config.is_incremental(&dir.entry.fullname()) {
+                    if !args.cont || !dir.entry.archive_exists(db, sid).await? {
+                        Self::archive_dir(db, fs, sid, &mut dir.entry).await?;
                     }
-                } else if !self.args.cont || dir.entry.exists(db, sid).await? {
-                    self.remove_dir(db, fs, &dir.entry).await?;
+                } else if !args.cont || dir.entry.exists(db, sid).await? {
+                    Self::remove_dir(db, fs, &dir.entry).await?;
                 }
             }
             Ok(())
         })
     }
 
-    fn compute_statistics(&self, snapshot: &mut Snapshot, diff: &TreeDiff) {
+    fn compute_statistics(snapshot: &mut Snapshot, diff: &TreeDiff) {
         snapshot.count += diff.file_added.len() as u64;
         snapshot.new_count += diff.file_added.len() as u64;
         for file in &diff.file_added {
@@ -518,16 +534,16 @@ impl BackupCommand {
         }
     }
 
-    async fn compute_tree(&self, db: &Database, sid: u64, diff: TreeDiff) -> Result<(), CmdError> {
-        let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
+    async fn compute_tree(args: &Arc<BackupArgs>, db: Arc<Database>, psid: u64, sid: u64, diff: TreeDiff) -> Result<(), CmdError> {
+        let fs = Arc::new(FileSystem::new(&args.config.source, &args.config.target));
         tokio::try_join!(
-            self.process_new_files(db, &fs, sid, diff.file_added),
-            self.process_modified_files(db, &fs, sid, diff.file_modified),
-            self.process_unchanged_files(db, &fs, sid, diff.file_unchanged),
-            self.process_deleted_files(db, &fs, sid, diff.file_deleted),
-            self.process_unchanged_dirs(db, &fs, sid, diff.dir_unchanged),
-            self.process_new_dirs(db, &fs, sid, diff.dir_added),
-            self.process_deleted_dirs(db, &fs, sid, diff.dir_deleted),
+            Self::process_new_files(args, &db, &fs, psid, sid, diff.file_added),
+            Self::process_modified_files(args, &db, &fs, psid, sid, diff.file_modified),
+            Self::process_unchanged_files(args, &db, &fs, psid, sid, diff.file_unchanged),
+            Self::process_deleted_files(args, &db, &fs, psid, sid, diff.file_deleted),
+            Self::process_unchanged_dirs(args, &db, &fs, psid, sid, diff.dir_unchanged),
+            Self::process_new_dirs(args, &db, &fs, psid, sid, diff.dir_added),
+            Self::process_deleted_dirs(args, &db, &fs, psid, sid, diff.dir_deleted),
         )?;
         Ok(())
     }
