@@ -377,6 +377,35 @@ impl BackupCommand {
         Ok(())
     }
 
+    async fn process_modified_files(&self, db: &Database, fs: &FileSystem, sid: u64, files: Vec<(File, File)>) -> Result<(), CmdError> {
+        for (mut previous_file, mut file) in files {
+            if self.args.verbose || self.previous_snapshot.id != 0 {
+                println!("  Modified file {:?}", previous_file.fullname())
+            }
+            if !self.args.dry_run {
+                if self.args.config.is_incremental(&file.fullname()) {
+                    if !self.args.cont || !file.exists(db, sid).await? {
+                        self.archive_file(db, fs, sid, &mut previous_file).await?;
+                        self.insert_new_file(db, fs, sid, &mut file).await?;
+                    }
+                } else if !self.args.cont || !file.exists(db, sid).await? {
+                    self.insert_new_file(db, fs, sid, &mut file).await?;
+                    self.remove_previous_file(db, fs, &previous_file, &file).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_unchanged_files(&self, db: &Database, fs: &FileSystem, sid: u64, files: Vec<File>) -> Result<(), CmdError> {
+        for previous_file in files {
+            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, sid).await?) {
+                self.insert_unchanged_file(db, fs, sid, &previous_file).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn process_deleted_files(&self, db: &Database, fs: &FileSystem, sid: u64, files: Vec<File>) -> Result<(), CmdError> {
         for mut file in files {
             file.deleted_sid = sid;
@@ -396,7 +425,30 @@ impl BackupCommand {
         Ok(())
     }
 
-    fn process_new_dirs<'a>(
+    async fn process_unchanged_dirs(&self, db: &Database, _: &FileSystem, sid: u64, dirs: Vec<File>) -> Result<(), CmdError> {
+        for dir in dirs {
+            if !self.args.dry_run && (!self.args.cont || !dir.exists(db, sid).await?) {
+                dir.insert_ref(db, sid).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_new_dirs(&self, db: &Database, fs: &FileSystem, sid: u64, dirs: Vec<Directory>) -> Result<(), CmdError> {
+        for dir in dirs {
+            self.process_new_dir(db, fs, sid, dir).await?;
+        }
+        Ok(())
+    }
+
+    async fn process_deleted_dirs(&self, db: &Database, fs: &FileSystem, sid: u64, dirs: Vec<Directory>) -> Result<(), CmdError> {
+        for dir in dirs {
+            self.process_deleted_dir(db, fs, sid, dir).await?;
+        }
+        Ok(())
+    }
+
+    fn process_new_dir<'a>(
         &'a self, db: &'a Database, fs: &'a FileSystem, sid: u64, mut dir: Directory,
     ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + '_>> {
         Box::pin(async move {
@@ -407,13 +459,13 @@ impl BackupCommand {
             self.process_new_files(db, fs, sid, files).await?;
             let dirs: Vec<Directory> = dir.children.into_iter().collect();
             for dir in dirs {
-                self.process_new_dirs(db, fs, sid, dir).await?;
+                self.process_new_dir(db, fs, sid, dir).await?;
             }
             Ok(())
         })
     }
 
-    fn process_deleted_dirs<'a>(
+    fn process_deleted_dir<'a>(
         &'a self, db: &'a Database, fs: &'a FileSystem, sid: u64, mut dir: Directory,
     ) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + Send + '_>> {
         Box::pin(async move {
@@ -424,7 +476,7 @@ impl BackupCommand {
             self.process_deleted_files(db, fs, sid, files).await?;
             let dirs: Vec<Directory> = dir.children.into_iter().collect();
             for dir in dirs {
-                self.process_deleted_dirs(db, fs, sid, dir).await?;
+                self.process_deleted_dir(db, fs, sid, dir).await?;
             }
             if !self.args.dry_run {
                 if self.args.config.is_incremental(&dir.entry.fullname()) {
@@ -468,41 +520,15 @@ impl BackupCommand {
 
     async fn compute_tree(&self, db: &Database, sid: u64, diff: TreeDiff) -> Result<(), CmdError> {
         let fs = FileSystem::new(&self.args.config.source, &self.args.config.target);
-        self.process_new_files(db, &fs, sid, diff.file_added).await?;
-        for (mut previous_file, mut file) in diff.file_modified {
-            if self.args.verbose || self.previous_snapshot.id != 0 {
-                println!("  Modified file {:?}", previous_file.fullname())
-            }
-            if !self.args.dry_run {
-                if self.args.config.is_incremental(&file.fullname()) {
-                    if !self.args.cont || !file.exists(db, sid).await? {
-                        self.archive_file(db, &fs, sid, &mut previous_file).await?;
-                        self.insert_new_file(db, &fs, sid, &mut file).await?;
-                    }
-                } else if !self.args.cont || !file.exists(db, sid).await? {
-                    self.insert_new_file(db, &fs, sid, &mut file).await?;
-                    self.remove_previous_file(db, &fs, &previous_file, &file).await?;
-                }
-            }
-        }
-        for previous_file in diff.file_unchanged {
-            if !self.args.dry_run && (!self.args.cont || !previous_file.exists(db, sid).await?) {
-                self.insert_unchanged_file(db, &fs, sid, &previous_file).await?;
-            }
-        }
-        self.process_deleted_files(db, &fs, sid, diff.file_deleted).await?;
-
-        for dir in diff.dir_unchanged {
-            if !self.args.dry_run && (!self.args.cont || !dir.exists(db, sid).await?) {
-                dir.insert_ref(db, sid).await?;
-            }
-        }
-        for dir in diff.dir_added {
-            self.process_new_dirs(db, &fs, sid, dir).await?;
-        }
-        for dir in diff.dir_deleted {
-            self.process_deleted_dirs(db, &fs, sid, dir).await?;
-        }
+        tokio::try_join!(
+            self.process_new_files(db, &fs, sid, diff.file_added),
+            self.process_modified_files(db, &fs, sid, diff.file_modified),
+            self.process_unchanged_files(db, &fs, sid, diff.file_unchanged),
+            self.process_deleted_files(db, &fs, sid, diff.file_deleted),
+            self.process_unchanged_dirs(db, &fs, sid, diff.dir_unchanged),
+            self.process_new_dirs(db, &fs, sid, diff.dir_added),
+            self.process_deleted_dirs(db, &fs, sid, diff.dir_deleted),
+        )?;
         Ok(())
     }
 }
