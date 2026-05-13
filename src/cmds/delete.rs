@@ -31,7 +31,7 @@ impl From<DeleteArgs> for DeleteCommand {
 
 impl Command for DeleteCommand {
     fn validate(&mut self) -> Result<(), Error> {
-        if self.args.sids.is_empty() && self.args.keep_last == 0 && self.args.older_than.year() != 1970 {
+        if self.args.sids.is_empty() && self.args.keep_last == 0 && self.args.older_than.year() == 1970 {
             return Err(InvalidOption(String::from("Missing snapshot selector")));
         }
         Regex::new(&self.args.pattern).map_err(|_| InvalidOption(format!("Invalid pattern {}", self.args.pattern)))?;

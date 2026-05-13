@@ -600,6 +600,30 @@ impl BackupCommand {
         })
     }
 
+    fn compute_new_dir_statistics(snapshot: &mut Snapshot, dir: &Directory) {
+        for file in &dir.files {
+            snapshot.count += 1;
+            snapshot.size += file.size;
+            snapshot.new_count += 1;
+            snapshot.new_size += file.size;
+        }
+        for child in &dir.children {
+            Self::compute_new_dir_statistics(snapshot, child);
+        }
+    }
+
+    fn compute_deleted_dir_statistics(snapshot: &mut Snapshot, dir: &Directory) {
+        for file in &dir.files {
+            snapshot.count += 1;
+            snapshot.size += file.size;
+            snapshot.deleted_count += 1;
+            snapshot.deleted_size += file.size;
+        }
+        for child in &dir.children {
+            Self::compute_deleted_dir_statistics(snapshot, child);
+        }
+    }
+
     fn compute_statistics(snapshot: &mut Snapshot, diff: &TreeDiff) {
         snapshot.count += diff.file_added.len() as u64;
         snapshot.new_count += diff.file_added.len() as u64;
@@ -624,6 +648,12 @@ impl BackupCommand {
         for file in &diff.file_deleted {
             snapshot.size += file.size;
             snapshot.deleted_size += file.size;
+        }
+        for dir in &diff.dir_added {
+            Self::compute_new_dir_statistics(snapshot, dir);
+        }
+        for dir in &diff.dir_deleted {
+            Self::compute_deleted_dir_statistics(snapshot, dir);
         }
     }
 
