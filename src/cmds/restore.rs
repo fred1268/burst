@@ -5,8 +5,8 @@ use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::file::File;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
 use crate::tools::db::Database;
+use crate::tools::error::Error::{self, InvalidBackupDirectory, InvalidOption};
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
 use std::future::Future;
@@ -30,8 +30,8 @@ impl From<RestoreArgs> for RestoreCommand {
 }
 
 impl Command for RestoreCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
-        if !self.args.to.try_exists().map_err(|err| CmdError::IoError(crate::tools::cmderror::IoError::from(&self.args.to, err)))? {
+    fn validate(&mut self) -> Result<(), Error> {
+        if !self.args.to.try_exists().map_err(|err| Error::IoError(crate::tools::error::IoError::from(&self.args.to, err)))? {
             return Err(InvalidOption(String::from("Invalid restore path")));
         }
         if self.args.sid == 0 {
@@ -42,41 +42,40 @@ impl Command for RestoreCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} restore [OPTIONS] <BACKUP_PATH> <RESTORE_PATH>", self.args.exe);
-        println!();
-        println!("Restores files from backup snapshot to specified location.");
-        println!();
-        println!("Options:");
-        println!("\t-s, --snapshot <ID>\t\t\trestore from specific snapshot");
-        println!("\t-p, --pattern <PATTERN>\t\t\tfiles or directories to restore");
-        println!("\t-w, --overwrite\t\t\t\toverwrite existing files");
-        println!("\t-t, --flatten\t\t\t\tignore original directory paths");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
-        println!();
-        println!("Examples of patterns (regex):");
-        println!("\t*.png:\t\t\t\t\t--pattern \".*\\.png\"");
-        println!("\tPDFs inside any manuals folders:\t--pattern: \"/?manuals(/.*)?/.*\\.pdf$\"");
+        println!(
+            "Usage: {} restore [OPTIONS] <BACKUP_PATH> <RESTORE_PATH>\n\n\
+        Restores files from backup snapshot to specified location.\n\n\
+        Options:\n\
+        \t-s, --snapshot <ID>\t\t\trestore from specific snapshot\n\
+        \t-p, --pattern <PATTERN>\t\t\tfiles or directories to restore\n\
+        \t-w, --overwrite\t\t\t\toverwrite existing files\n\
+        \t-t, --flatten\t\t\t\tignore original directory paths\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\
+        \t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead\n\n\
+        Examples of patterns (regex):\n\
+        \t*.png:\t\t\t\t\t--pattern \".*\\.png\"\n\
+        \tPDFs inside any manuals folders:\t--pattern: \"/?manuals(/.*)?/.*\\.pdf$\"",
+            self.args.exe
+        );
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             let start = Instant::now();
             if self.args.verbose {
                 println!("restore command started");
                 println!("Running {}", self.args);
             }
-            match command::start(&self.args.config.target).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    CmdError::NoRemote() => {
+            if let Err(err) = command::start(&self.args.config.target).await {
+                match err {
+                    Error::NoRemote() => {
                         if !self.args.dry_run {
                             return Err(InvalidBackupDirectory());
                         }
                     }
                     _ => return Err(err),
-                },
+                }
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
             let db = Database::open(&self.args.config.target).await?;
@@ -101,7 +100,7 @@ impl Command for RestoreCommand {
 }
 
 impl RestoreCommand {
-    async fn restore(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot) -> Result<(), CmdError> {
+    async fn restore(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot) -> Result<(), Error> {
         let files = File::entries_matching(db, snapshot.id, &self.args.pattern).await?;
         for file in files {
             if self.args.verbose {

@@ -3,9 +3,9 @@ use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::constants::{BURST_DIRECTORY, BURST_VERSION_DIR};
 use crate::cmds::file::File;
-use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
-use crate::tools::cmderror::IoError;
 use crate::tools::db::Database;
+use crate::tools::error::Error::{self, InvalidBackupDirectory, InvalidOption};
+use crate::tools::error::IoError;
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
 use std::fs;
@@ -32,7 +32,7 @@ impl From<VerifyArgs> for VerifyCommand {
 }
 
 impl Command for VerifyCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
+    fn validate(&mut self) -> Result<(), Error> {
         match self.args.topic.as_str() {
             "hash" | "integrity" => (),
             _ => return Err(InvalidOption(String::from("Invalid parameter: expected 'hash' or 'integrity'"))),
@@ -41,33 +41,32 @@ impl Command for VerifyCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} verify <WHAT> [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Verifies backup integrity and files consistency.");
-        println!();
-        println!("What:");
-        println!("\tintegrity\t\t\t\tcheck backup file system integrity");
-        println!("\thash\t\t\t\t\tcheck file integrity by comparing hash");
-        println!();
-        println!("Options:");
-        println!("\t    --fix\t\t\t\ttry to fix issues if any");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
+        println!(
+            "Usage: {} verify <WHAT> [OPTIONS] <BACKUP_PATH>\n\n\
+        Verifies backup integrity and files consistency.\n\n\
+        What:\n\
+        \tintegrity\t\t\t\tcheck backup file system integrity\n\
+        \thash\t\t\t\t\tcheck file integrity by comparing hash\n\n\
+        Options:\n\
+        \t    --fix\t\t\t\ttry to fix issues if any\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information",
+            self.args.exe
+        );
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             let start = Instant::now();
             if self.args.verbose {
                 println!("verify command started");
                 println!("Running {}", self.args);
             }
-            match command::start(&self.args.config.target).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    CmdError::NoRemote() => return Err(InvalidBackupDirectory()),
+            if let Err(err) = command::start(&self.args.config.target).await {
+                match err {
+                    Error::NoRemote() => return Err(InvalidBackupDirectory()),
                     _ => return Err(err),
-                },
+                }
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
             let db = Database::open(&self.args.config.target).await?;
@@ -93,7 +92,7 @@ impl Command for VerifyCommand {
 }
 
 impl VerifyCommand {
-    async fn hash(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn hash(&mut self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         if self.args.verbose {
             println!("Verifying hash")
         }
@@ -118,7 +117,7 @@ impl VerifyCommand {
         Ok(())
     }
 
-    async fn integrity(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn integrity(&mut self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         if !self.args.quiet {
             println!("Verifying integrity");
             println!("Phase #1: checking database");
@@ -148,15 +147,15 @@ impl VerifyCommand {
         Ok(())
     }
 
-    fn read_directory<'a>(&'a mut self, db: &'a Database, dir: &'a Path) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + 'a>> {
+    fn read_directory<'a>(&'a mut self, db: &'a Database, dir: &'a Path) -> Pin<Box<dyn Future<Output = Result<(), Error>> + 'a>> {
         Box::pin(async move {
             if self.args.verbose {
                 println!("  Directory {:?}", dir);
             }
             let mut dirs: Vec<PathBuf> = vec![];
-            let entries = fs::read_dir(dir).map_err(|err| CmdError::IoError(IoError::from_str("Cannot iterate entries", err)))?;
+            let entries = fs::read_dir(dir).map_err(|err| Error::IoError(IoError::from_str("Cannot iterate entries", err)))?;
             for entry in entries {
-                let entry = entry.map_err(|err| CmdError::IoError(IoError::from_str("Invalid entry", err)))?;
+                let entry = entry.map_err(|err| Error::IoError(IoError::from_str("Invalid entry", err)))?;
                 let p = entry.path();
                 if p.ends_with(BURST_DIRECTORY) || p.ends_with(BURST_VERSION_DIR) {
                     continue;
@@ -165,7 +164,7 @@ impl VerifyCommand {
                     db,
                     &PathBuf::from(
                         p.strip_prefix(&self.args.config.target)
-                            .map_err(|_| CmdError::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
+                            .map_err(|_| Error::GenericError(format!("Cannot strip prefix: {:?}", p)))?,
                     ),
                 )
                 .await?

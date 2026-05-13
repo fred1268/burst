@@ -1,5 +1,5 @@
 use crate::args::backupconfig::BackupConfig;
-use crate::tools::cmderror::CmdError;
+use crate::tools::error::Error;
 use crate::tools::fs::FileSystem;
 use std::fmt;
 use std::string::String;
@@ -37,9 +37,9 @@ impl fmt::Display for HistoryArgs {
 }
 
 impl HistoryArgs {
-    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, Error> {
         if args.len() < MIN_PARAMS {
-            return Err(CmdError::InvalidParameters);
+            return Err(Error::InvalidParameters);
         }
         let mut params = HistoryArgs::default();
         params.exe.push_str(&args[0]);
@@ -49,7 +49,7 @@ impl HistoryArgs {
                 "--limit" | "-n" => {
                     match args[n + 1].parse::<u64>() {
                         Ok(limit) => params.limit = limit,
-                        Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                        Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                     }
                     n += 1;
                 }
@@ -57,7 +57,7 @@ impl HistoryArgs {
                 "--verbose" | "-v" => params.verbose = true,
                 _ => {
                     if args[n].starts_with("--") {
-                        return Err(CmdError::InvalidParameter(args[n].clone()));
+                        return Err(Error::InvalidParameter(args[n].clone()));
                     }
                 }
             }
@@ -66,7 +66,7 @@ impl HistoryArgs {
         if !args[args.len() - 1].starts_with("--") {
             match FileSystem::canonicalize(&args[args.len() - 1]).await {
                 Ok(target) => params.config.target = target,
-                Err(_) => return Err(CmdError::InvalidBackupDirectory()),
+                Err(_) => return Err(Error::InvalidBackupDirectory()),
             }
         }
         if params.verbose {

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::tools::cmderror::CmdError;
+use crate::tools::error::Error;
 
 const MIN_PARAMS: usize = 2;
 
@@ -17,9 +17,9 @@ impl fmt::Display for HelpArgs {
 }
 
 impl HelpArgs {
-    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, Error> {
         if args.len() < MIN_PARAMS {
-            return Err(CmdError::InvalidParameters);
+            return Err(Error::InvalidParameters);
         }
         let mut params = HelpArgs::default();
         params.exe.push_str(&args[0]);
@@ -28,7 +28,7 @@ impl HelpArgs {
                 "init" | "backup" | "restore" | "config" | "delete" | "list" | "history" | "verify" | "info" => {
                     params.command.push_str(&args[2])
                 }
-                _ => return Err(CmdError::InvalidParameter(args[2].clone())),
+                _ => return Err(Error::InvalidParameter(args[2].clone())),
             }
         }
         Ok(params)

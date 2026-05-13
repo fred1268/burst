@@ -5,8 +5,8 @@ use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::file::File;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError::{self, InvalidOption};
 use crate::tools::db::Database;
+use crate::tools::error::Error::{self, InvalidOption};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -27,7 +27,7 @@ impl From<ListArgs> for ListCommand {
 }
 
 impl Command for ListCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
+    fn validate(&mut self) -> Result<(), Error> {
         if (self.args.sid != 0 || self.args.deleted || self.args.diff_sid != 0) && !self.args.pattern.is_empty() {
             return Err(InvalidOption(String::from("--pattern does not work with --snapshot, --deleted or --diff-with")));
         }
@@ -39,31 +39,31 @@ impl Command for ListCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} list [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Shows files in a snapshot or the specified files history.");
-        println!();
-        println!("Options:");
-        println!("\t-s, --snapshot <ID>\t\t\tList the content of a specific snapshot");
-        println!("\t-i, --diff-with\t\t\t\tShow differences with the specified snapshot");
-        println!("\t-p, --pattern <PATTERN>\t\t\tShow all historical versions for specified files");
-        println!("\t-d, --deleted\t\t\t\tShow only deleted files in the specified snapshot");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
+        println!(
+            "Usage: {} list [OPTIONS] <BACKUP_PATH>\n\n\
+        Shows files in a snapshot or the specified files history.\n\n\
+        Options:\n\
+        \t-s, --snapshot <ID>\t\t\tList the content of a specific snapshot\n\
+        \t-i, --diff-with\t\t\t\tShow differences with the specified snapshot\n\
+        \t-p, --pattern <PATTERN>\t\t\tShow all historical versions for specified files\n\
+        \t-d, --deleted\t\t\t\tShow only deleted files in the specified snapshot\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information",
+            self.args.exe
+        );
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             if self.args.verbose {
                 println!("list command started");
                 println!("Running {}", self.args);
             }
-            match command::start(&self.args.config.target).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    CmdError::NoRemote() => (),
+            if let Err(err) = command::start(&self.args.config.target).await {
+                match err {
+                    Error::NoRemote() => (),
                     _ => return Err(err),
-                },
+                }
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
             let db = Database::open(&self.args.config.target).await?;
@@ -87,7 +87,7 @@ impl Command for ListCommand {
 }
 
 impl ListCommand {
-    async fn list_snapshot(&self, db: &Database, snapshot: &Snapshot) -> Result<(), CmdError> {
+    async fn list_snapshot(&self, db: &Database, snapshot: &Snapshot) -> Result<(), Error> {
         let files = match self.args.deleted {
             true => {
                 if let Some(previous_snapshot) = Snapshot::get_previous(db, snapshot.id).await? {
@@ -129,7 +129,7 @@ impl ListCommand {
         Ok(())
     }
 
-    async fn list_file(&self, db: &Database, _snapshot: Snapshot) -> Result<(), CmdError> {
+    async fn list_file(&self, db: &Database, _snapshot: Snapshot) -> Result<(), Error> {
         let files = match self.args.config.incremental {
             true => File::history(db, &self.args.pattern).await?,
             false => File::history_sync_mode(db, &self.args.pattern).await?,

@@ -3,8 +3,8 @@ use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::file::File;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption};
 use crate::tools::db::Database;
+use crate::tools::error::Error::{self, InvalidBackupDirectory, InvalidOption};
 use crate::tools::fmt::human_readable_duration;
 use crate::tools::fs::FileSystem;
 use chrono::Datelike;
@@ -30,8 +30,8 @@ impl From<DeleteArgs> for DeleteCommand {
 }
 
 impl Command for DeleteCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
-        if self.args.sids.is_empty() && self.args.keep_last == 0 && self.args.older_than.year() != 1970 {
+    fn validate(&mut self) -> Result<(), Error> {
+        if self.args.sids.is_empty() && self.args.keep_last == 0 && self.args.older_than.year() == 1970 {
             return Err(InvalidOption(String::from("Missing snapshot selector")));
         }
         Regex::new(&self.args.pattern).map_err(|_| InvalidOption(format!("Invalid pattern {}", self.args.pattern)))?;
@@ -39,43 +39,41 @@ impl Command for DeleteCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} delete <SELECTOR> [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Removes backup history selectively to manage storage space and retention policies.");
-        println!();
-        println!("Selector:");
-        println!("\t-s, --snapshot <SPEC>\t\t\tdelete snapshots (single: 5, list: 1,3,7, range: 1-5)");
-        println!("\t-o, --older-than <DATE>\t\t\tdelete history older than specified date (yyyy-mm-dd)");
-        println!("\t-l, --keep-last <COUNT>\t\t\tkeep only the last N versions of each file");
-        println!();
-        println!("Options:");
-        println!("\t-p, --pattern <PATTERN>\t\t\tfiles or directories to delete (relative to backup root)");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
-        println!();
-        println!("Examples of patterns (regex):");
-        println!("\t*.png:\t\t\t\t\t--pattern \".*\\.png$\"");
-        println!("\toffice folder and its content:\t\t--pattern: \"/?office(/.*)?$\"");
+        println!(
+            "Usage: {} delete <SELECTOR> [OPTIONS] <BACKUP_PATH>\n\n\
+        Removes backup history selectively to manage storage space and retention policies.\n\n\
+        Selector:\n\
+        \t-s, --snapshot <SPEC>\t\t\tdelete snapshots (single: 5, list: 1,3,7, range: 1-5)\n\
+        \t-o, --older-than <DATE>\t\t\tdelete history older than specified date (yyyy-mm-dd)\n\
+        \t-l, --keep-last <COUNT>\t\t\tkeep only the last N versions of each file\n\n\
+        Options:\n\
+        \t-p, --pattern <PATTERN>\t\t\tfiles or directories to delete (relative to backup root)\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\
+        \t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead\n\n\
+        Examples of patterns (regex):\n\
+        \t*.png:\t\t\t\t\t--pattern \".*\\.png$\"\n\
+        \toffice folder and its content:\t\t--pattern: \"/?office(/.*)?$\"",
+            self.args.exe
+        );
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             let start = Instant::now();
             if self.args.verbose {
                 println!("delete command started");
                 println!("Running {}", self.args);
             }
-            match command::start(&self.args.config.target).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    CmdError::NoRemote() => {
+            if let Err(err) = command::start(&self.args.config.target).await {
+                match err {
+                    Error::NoRemote() => {
                         if !self.args.dry_run {
                             return Err(InvalidBackupDirectory());
                         }
                     }
                     _ => return Err(err),
-                },
+                }
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
             let db = Database::open(&self.args.config.target).await?;
@@ -109,19 +107,19 @@ impl Command for DeleteCommand {
 }
 
 impl DeleteCommand {
-    async fn unarchive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), CmdError> {
+    async fn unarchive_file(&self, db: &Database, fs: &FileSystem, snapshot: &Snapshot, file: &mut File) -> Result<(), Error> {
         file.deleted_sid = 0;
         file.unarchive(db).await?;
         fs.unarchive_file(snapshot.id, file).await
     }
 
-    async fn unarchive_dir(&self, db: &Database, fs: &FileSystem, dir: &mut File) -> Result<(), CmdError> {
+    async fn unarchive_dir(&self, db: &Database, fs: &FileSystem, dir: &mut File) -> Result<(), Error> {
         dir.deleted_sid = 0;
         dir.unarchive(db).await?;
         fs.remove_archive_dir(dir).await
     }
 
-    async fn clean_up(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn clean_up(&self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         let dirs = File::filesystem_dirs(db).await?;
         for dir in &dirs {
             if !fs.exists(dir, &self.args.config.target).await? {
@@ -135,7 +133,7 @@ impl DeleteCommand {
         Ok(())
     }
 
-    async fn delete_history_incremental(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn delete_history_incremental(&self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         for sid in &self.args.sids {
             if !self.args.quiet {
                 println!("Deleting snapshot {} files", *sid);
@@ -186,7 +184,7 @@ impl DeleteCommand {
         Ok(())
     }
 
-    async fn delete_history_non_incremental(&self, db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn delete_history_non_incremental(&self, db: &Database, _fs: &FileSystem) -> Result<(), Error> {
         for sid in &self.args.sids {
             if !self.args.quiet {
                 println!("Deleting snapshot {} files", *sid);

@@ -4,8 +4,8 @@ use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::file::File;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError::{self, InvalidBackupDirectory, InvalidOption, InvalidSourceDirectory};
 use crate::tools::db::Database;
+use crate::tools::error::Error::{self, InvalidBackupDirectory, InvalidOption, InvalidSourceDirectory};
 use crate::tools::fs::FileSystem;
 use regex::Regex;
 use std::future::Future;
@@ -29,7 +29,7 @@ impl From<ConfigArgs> for ConfigCommand {
 }
 
 impl Command for ConfigCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
+    fn validate(&mut self) -> Result<(), Error> {
         match self.args.subcommand.as_str() {
             "show" => {
                 if !self.args.key.is_empty() || !self.args.value.is_empty() {
@@ -72,41 +72,38 @@ impl Command for ConfigCommand {
     }
 
     fn help(&self) {
-        println!("Usage: {} config <SUBCOMMAND> [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Manages backup repository configuration and performs configuration-related operations.");
-        println!("Includes both safe configuration changes and destructive repository modifications.");
-        println!();
-        println!("Subcommands:");
-        println!("\tshow\t\t\t\t\tdisplay current configuration");
-        println!("\tget <KEY>\t\t\t\tget specific configuration value");
-        println!("\tset <KEY> <VALUE>\t\t\tset configuration value (source|hash_comparison|follow_symlinks)");
-        println!("\tadd <KEY> <PATTERN>\t\t\tadd value to multi-value keys (exclude|no_history)");
-        println!("\tremove <KEY> <PATTERN>\t\t\tRemove specific value OR entire key (exclude|no_history)");
-        println!("\tconvert <MODE>\t\t\t\tconvert repository mode (sync|incremental)");
-        // println!("\tvalidate\t\t\t\tcheck configuration file validity");
-        println!();
-        println!("Options:");
-        println!("\t    --fix-history\t\t\tremove previously backed up versions (destructive)");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
-        println!("\t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead");
-        println!();
-        println!("Examples of patterns (regex):");
-        println!("\t*.tmp:\t\t\t\t\t add exclude \".*\\.tmp\"");
-        println!("\tmacOS trash:\t\t\t\tadd exclude: \".*/\\.DS_Store$\"");
+        println!(
+            "Usage: {} config <SUBCOMMAND> [OPTIONS] <BACKUP_PATH>\n\n\
+        Manages backup repository configuration and performs configuration-related operations.\n\
+        Includes both safe configuration changes and destructive repository modifications.\n\n\
+        Subcommands:\n\
+        \tshow\t\t\t\t\tdisplay current configuration\n\
+        \tget <KEY>\t\t\t\tget specific configuration value\n\
+        \tset <KEY> <VALUE>\t\t\tset configuration value (source|hash_comparison|follow_symlinks)\n\
+        \tadd <KEY> <PATTERN>\t\t\tadd value to multi-value keys (exclude|no_history)\n\
+        \tremove <KEY> <PATTERN>\t\t\tRemove specific value OR entire key (exclude|no_history)\n\
+        \tconvert <MODE>\t\t\t\tconvert repository mode (sync|incremental)\n\n\
+        Options:\n\
+        \t    --fix-history\t\t\tremove previously backed up versions (destructive)\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information\n\
+        \t-n, --dry-run\t\t\t\tdon't actually touch the filesystem, do a dry run instead\n\n\
+        Examples of patterns (regex):\n\
+        \t*.tmp:\t\t\t\t\tadd exclude \".*\\.tmp\"\n\
+        \tmacOS trash:\t\t\t\tadd exclude: \".*/\\.DS_Store$\"",
+            self.args.exe
+        );
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             if self.args.verbose {
                 println!("config command started");
                 println!("Running {}", self.args);
             }
-            match command::start(&self.args.config.target).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    CmdError::NoRemote() => match self.args.subcommand.as_str() {
+            if let Err(err) = command::start(&self.args.config.target).await {
+                match err {
+                    Error::NoRemote() => match self.args.subcommand.as_str() {
                         "show" | "get" => (),
                         _ => {
                             if !self.args.dry_run {
@@ -115,7 +112,7 @@ impl Command for ConfigCommand {
                         }
                     },
                     _ => return Err(err),
-                },
+                }
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
             let db = Database::open(&self.args.config.target).await?;
@@ -138,7 +135,7 @@ impl Command for ConfigCommand {
 }
 
 impl ConfigCommand {
-    async fn show(&self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn show(&self, _db: &Database, _fs: &FileSystem) -> Result<(), Error> {
         if self.args.verbose {
             println!("Showing config")
         }
@@ -146,7 +143,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    async fn get(&self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn get(&self, _db: &Database, _fs: &FileSystem) -> Result<(), Error> {
         if self.args.verbose {
             println!("Retrieving {}", self.args.key)
         }
@@ -162,7 +159,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    async fn set(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn set(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), Error> {
         if self.args.verbose {
             println!("Setting {} to {}", self.args.key, self.args.value)
         }
@@ -172,11 +169,11 @@ impl ConfigCommand {
             }
             "hash_comparison" => {
                 self.args.config.hash_comparison =
-                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
+                    self.args.value.parse::<bool>().map_err(|_| Error::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
             }
             "follow_symlinks" => {
                 self.args.config.follow_symlinks =
-                    self.args.value.parse::<bool>().map_err(|_| CmdError::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
+                    self.args.value.parse::<bool>().map_err(|_| Error::InvalidOption(format!("Cannot parse {}", &self.args.value)))?
             }
             _ => return Err(InvalidOption(format!("Invalid key {}", self.args.key))),
         }
@@ -186,7 +183,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    async fn add(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn add(&mut self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         if self.args.verbose {
             println!("Adding {} to {}", self.args.value, self.args.key)
         }
@@ -223,7 +220,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    async fn remove(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), CmdError> {
+    async fn remove(&mut self, _db: &Database, _fs: &FileSystem) -> Result<(), Error> {
         if self.args.verbose {
             if self.args.value.is_empty() {
                 if self.args.verbose {
@@ -267,7 +264,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    async fn convert(&mut self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn convert(&mut self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         if self.args.verbose {
             println!("Converting backup to {}", self.args.key)
         }
@@ -296,7 +293,7 @@ impl ConfigCommand {
         Ok(())
     }
 
-    async fn fix_history(&self, db: &Database, fs: &FileSystem, added: &[Regex], keep_sid: u64) -> Result<(), CmdError> {
+    async fn fix_history(&self, db: &Database, fs: &FileSystem, added: &[Regex], keep_sid: u64) -> Result<(), Error> {
         if !self.args.fix_history {
             return Ok(());
         }
@@ -329,7 +326,7 @@ impl ConfigCommand {
         self.remove_orphans(db, fs).await
     }
 
-    async fn remove_orphans(&self, db: &Database, fs: &FileSystem) -> Result<(), CmdError> {
+    async fn remove_orphans(&self, db: &Database, fs: &FileSystem) -> Result<(), Error> {
         let entries = File::orphans(db).await?;
         for entry in entries {
             if self.args.verbose {

@@ -1,5 +1,5 @@
 use crate::args::backupconfig::BackupConfig;
-use crate::tools::cmderror::CmdError;
+use crate::tools::error::Error;
 use crate::tools::fs::FileSystem;
 use regex::Regex;
 use std::fmt;
@@ -30,9 +30,9 @@ impl fmt::Display for InitArgs {
 }
 
 impl InitArgs {
-    pub async fn from_args(args: &[String]) -> Result<Self, CmdError> {
+    pub async fn from_args(args: &[String]) -> Result<Self, Error> {
         if args.len() < MIN_PARAMS {
-            return Err(CmdError::InvalidParameters);
+            return Err(Error::InvalidParameters);
         }
         let mut params = InitArgs::default();
         params.exe.push_str(&args[0]);
@@ -61,7 +61,7 @@ impl InitArgs {
                                 params.config.exclude.push(String::from(value));
                                 params.config.re_excl.push(re)
                             }
-                            Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                            Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                         }
                     }
                     n += 1;
@@ -73,7 +73,7 @@ impl InitArgs {
                                 params.config.no_history.push(String::from(value));
                                 params.config.re_hist.push(re)
                             }
-                            Err(_) => return Err(CmdError::InvalidParameter(args[n + 1].clone())),
+                            Err(_) => return Err(Error::InvalidParameter(args[n + 1].clone())),
                         }
                     }
                     n += 1;
@@ -88,7 +88,7 @@ impl InitArgs {
                 "--verbose" | "-v" => params.verbose = true,
                 _ => {
                     if args[n].starts_with("--") {
-                        return Err(CmdError::InvalidParameter(args[n].clone()));
+                        return Err(Error::InvalidParameter(args[n].clone()));
                     }
                 }
             }
@@ -97,13 +97,13 @@ impl InitArgs {
         if !&args[args.len() - 2].starts_with("--") {
             match FileSystem::canonicalize(&args[args.len() - 2]).await {
                 Ok(source) => params.config.source = source,
-                Err(_) => return Err(CmdError::InvalidSourceDirectory()),
+                Err(_) => return Err(Error::InvalidSourceDirectory()),
             }
         }
         if !&args[args.len() - 1].starts_with("--") {
             match FileSystem::canonicalize(&args[args.len() - 1]).await {
                 Ok(target) => params.config.target = target,
-                Err(_) => return Err(CmdError::InvalidBackupDirectory()),
+                Err(_) => return Err(Error::InvalidBackupDirectory()),
             }
         }
         if params.verbose {

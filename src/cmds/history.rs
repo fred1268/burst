@@ -2,8 +2,8 @@ use crate::args::history::HistoryArgs;
 use crate::cmds::command;
 use crate::cmds::command::Command;
 use crate::cmds::snapshot::Snapshot;
-use crate::tools::cmderror::CmdError;
 use crate::tools::db::Database;
+use crate::tools::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -24,33 +24,33 @@ impl From<HistoryArgs> for HistoryCommand {
 }
 
 impl Command for HistoryCommand {
-    fn validate(&mut self) -> Result<(), CmdError> {
+    fn validate(&mut self) -> Result<(), Error> {
         Ok(())
     }
 
     fn help(&self) {
-        println!("Usage: {} history [OPTIONS] <BACKUP_PATH>", self.args.exe);
-        println!();
-        println!("Shows backup snapshot timeline with statistics.");
-        println!();
-        println!("Options:");
-        println!("\t-n, --limit\t\t\t\tLimit number of backups shown");
-        println!("\t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)");
-        println!("\t-v, --verbose\t\t\t\tdisplay more detailed information");
+        println!(
+            "Usage: {} history [OPTIONS] <BACKUP_PATH>\n\n\
+        Shows backup snapshot timeline with statistics.\n\n\
+        Options:\n\
+        \t-n, --limit\t\t\t\tLimit number of backups shown\n\
+        \t-q, --quiet\t\t\t\tdisplay less information than usual (only errors)\n\
+        \t-v, --verbose\t\t\t\tdisplay more detailed information",
+            self.args.exe
+        );
     }
 
-    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), CmdError>> + '_>> {
+    fn run(&mut self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + '_>> {
         Box::pin(async move {
             if self.args.verbose {
                 println!("history command started");
                 println!("Running {}", self.args);
             }
-            match command::start(&self.args.config.target).await {
-                Ok(_) => (),
-                Err(err) => match err {
-                    CmdError::NoRemote() => (),
+            if let Err(err) = command::start(&self.args.config.target).await {
+                match err {
+                    Error::NoRemote() => (),
                     _ => return Err(err),
-                },
+                }
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
             let db = Database::open(&self.args.config.target).await?;
