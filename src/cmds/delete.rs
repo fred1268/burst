@@ -65,16 +65,15 @@ impl Command for DeleteCommand {
                 println!("delete command started");
                 println!("Running {}", self.args);
             }
-            match command::start(&self.args.config.target).await {
-                Ok(_) => (),
-                Err(err) => match err {
+            if let Err(err) = command::start(&self.args.config.target).await {
+                match err {
                     Error::NoRemote() => {
                         if !self.args.dry_run {
                             return Err(InvalidBackupDirectory());
                         }
                     }
                     _ => return Err(err),
-                },
+                }
             };
             self.args.config.read(&command::config_file(&self.args.config.target)).await?;
             let db = Database::open(&self.args.config.target).await?;
