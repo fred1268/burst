@@ -4,10 +4,11 @@ use crate::tools::fs::FileSystem;
 use crate::tools::version::VERSION_1_1;
 use sqlx::query::Query;
 use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqliteJournalMode, SqliteRow};
-use sqlx::{Row, Sqlite, SqlitePool};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{Connection, Row, Sqlite};
+use sqlx::sqlite::SqliteConnection;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 const TABLE_EXISTS: &str = "SELECT name FROM sqlite_master WHERE type='table' AND name=?";
 
@@ -36,7 +37,7 @@ pub const MODE_WRITE: u8 = 0b0000_0001;
 pub const MODE_LOCAL: u8 = 0b0000_0010;
 
 pub struct Database {
-    pool: SqlitePool,
+    conn: Mutex<SqliteConnection>,
 }
 
 impl Database {
@@ -45,12 +46,10 @@ impl Database {
         let db_file = home_dir.join(BURST_METADATA_FILE);
         let opts =
             SqliteConnectOptions::new().filename(&db_file).journal_mode(SqliteJournalMode::Wal).busy_timeout(Duration::from_millis(5000));
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
+        let conn = SqliteConnection::connect_with(&opts)
             .await
             .map_err(|err| Error::DbError(DbError::from("Cannot open database", err)))?;
-        let db = Database { pool };
+        let db = Database { conn: Mutex::new(conn) };
         db.check_tables().await?;
         db.upgrade().await?;
         Ok(db)
@@ -84,7 +83,8 @@ impl Database {
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
+        let mut conn = self.conn.lock().await;
+        let row = bind(sqlx::query(sql)).fetch_optional(&mut *conn).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         Ok(row.is_some())
     }
 
@@ -92,7 +92,8 @@ impl Database {
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
-        bind(sqlx::query(sql)).execute(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
+        let mut conn = self.conn.lock().await;
+        bind(sqlx::query(sql)).execute(&mut *conn).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         Ok(())
     }
 
@@ -101,7 +102,8 @@ impl Database {
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
         F: FnOnce(SqliteRow) -> sqlx::Result<T, sqlx::Error>,
     {
-        let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
+        let mut conn = self.conn.lock().await;
+        let row = bind(sqlx::query(sql)).fetch_optional(&mut *conn).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         match row {
             Some(r) => Ok(Some(f(r).map_err(|err| Error::DbError(DbError::from(sql, err)))?)),
             None => Ok(None),
@@ -113,7 +115,8 @@ impl Database {
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
         F: Fn(SqliteRow) -> sqlx::Result<T, sqlx::Error>,
     {
-        let rows = bind(sqlx::query(sql)).fetch_all(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
+        let mut conn = self.conn.lock().await;
+        let rows = bind(sqlx::query(sql)).fetch_all(&mut *conn).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         rows.into_iter().map(|r| f(r).map_err(|err| Error::DbError(DbError::from(sql, err)))).collect()
     }
 
