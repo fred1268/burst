@@ -1,6 +1,6 @@
 use crate::cmds::constants::BURST_VERSION_DIR;
 use crate::tools::db::Database;
-use crate::tools::error::Error::{self};
+use crate::tools::error::Error;
 use crate::tools::fmt::human_readable_size;
 use chrono::{DateTime, Local};
 use sqlx::query::Query;

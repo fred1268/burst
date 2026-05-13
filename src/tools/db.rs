@@ -1,5 +1,5 @@
 use crate::cmds::constants::BURST_METADATA_FILE;
-use crate::tools::error::{DbError, Error};
+use crate::tools::error::{DbError, Error, Result};
 use crate::tools::fs::FileSystem;
 use crate::tools::version::VERSION_1_1;
 use sqlx::query::Query;
@@ -39,7 +39,7 @@ pub struct Database {
 }
 
 impl Database {
-    pub async fn open(target: &Path) -> Result<Database, Error> {
+    pub async fn open(target: &Path) -> Result<Database> {
         let home_dir = FileSystem::home_backup_dir(target);
         let db_file = home_dir.join(BURST_METADATA_FILE);
         let opts =
@@ -51,7 +51,7 @@ impl Database {
         Ok(db)
     }
 
-    async fn check_tables(&self) -> Result<(), Error> {
+    async fn check_tables(&self) -> Result<()> {
         if !self.exists(TABLE_EXISTS, |q| q.bind("inprogress")).await? {
             self.execute(IP_TABLE, |q| q).await?;
         }
@@ -75,7 +75,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn exists<'a, B>(&self, sql: &'a str, bind: B) -> Result<bool, Error>
+    pub async fn exists<'a, B>(&self, sql: &'a str, bind: B) -> Result<bool>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
@@ -83,7 +83,7 @@ impl Database {
         Ok(row.is_some())
     }
 
-    pub async fn execute<'a, B>(&self, sql: &'a str, bind: B) -> Result<(), Error>
+    pub async fn execute<'a, B>(&self, sql: &'a str, bind: B) -> Result<()>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
     {
@@ -91,10 +91,10 @@ impl Database {
         Ok(())
     }
 
-    pub async fn query_one<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Option<T>, Error>
+    pub async fn query_one<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Option<T>>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
-        F: FnOnce(SqliteRow) -> Result<T, sqlx::Error>,
+        F: FnOnce(SqliteRow) -> sqlx::Result<T, sqlx::Error>,
     {
         let row = bind(sqlx::query(sql)).fetch_optional(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         match row {
@@ -103,16 +103,16 @@ impl Database {
         }
     }
 
-    pub async fn query_list<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Vec<T>, Error>
+    pub async fn query_list<'a, T, B, F>(&self, sql: &'a str, bind: B, f: F) -> Result<Vec<T>>
     where
         B: FnOnce(Query<'a, Sqlite, SqliteArguments<'a>>) -> Query<'a, Sqlite, SqliteArguments<'a>>,
-        F: Fn(SqliteRow) -> Result<T, sqlx::Error>,
+        F: Fn(SqliteRow) -> sqlx::Result<T, sqlx::Error>,
     {
         let rows = bind(sqlx::query(sql)).fetch_all(&self.pool).await.map_err(|err| Error::DbError(DbError::from(sql, err)))?;
         rows.into_iter().map(|r| f(r).map_err(|err| Error::DbError(DbError::from(sql, err)))).collect()
     }
 
-    async fn upgrade(&self) -> Result<(), Error> {
+    async fn upgrade(&self) -> Result<()> {
         loop {
             let v: Option<String> = self.query_one(VER_READ, |q| q, |row| row.try_get(0)).await?;
             let version = match v {
@@ -130,13 +130,13 @@ impl Database {
         Ok(())
     }
 
-    async fn upgrade_to_1_1(&self) -> Result<(), Error> {
+    async fn upgrade_to_1_1(&self) -> Result<()> {
         self.execute(FH_TABLE, |q| q).await?;
         self.execute("INSERT INTO filehistory SELECT id, snapshot_id, digest, path, archive, name, size, compressed_size, encrypted, created, modified, deleted_sid, is_dir FROM fileversions fv JOIN snapshotfiles sf ON fv.id=sf.version_id WHERE sf.snapshot_id IN (SELECT id FROM snapshots ORDER BY created DESC LIMIT 1)", |q| q).await?;
         self.execute(VER_UPDATE, |q| q.bind(VERSION_1_1)).await
     }
 
-    async fn upgrade_to_x_y(&self) -> Result<(), Error> {
+    async fn upgrade_to_x_y(&self) -> Result<()> {
         // upgrade code here
 
         // self.execute(sqlx::query(VER_UPDATE).bind(VERSION_x_y)).await
