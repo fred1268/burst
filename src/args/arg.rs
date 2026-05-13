@@ -21,15 +21,15 @@ impl Args {
             return Err(Error::MissingCommand);
         }
         match args[1].as_str() {
-            "help" => help::HelpArgs::from_args(args).await.map(|cfg| Ok(Args::Help(cfg)))?,
-            "init" => init::InitArgs::from_args(args).await.map(|cfg| Ok(Args::Init(cfg)))?,
-            "backup" => backup::BackupArgs::from_args(args).await.map(|cfg| Ok(Args::Backup(cfg)))?,
-            "list" => list::ListArgs::from_args(args).await.map(|cfg| Ok(Args::List(cfg)))?,
-            "history" => history::HistoryArgs::from_args(args).await.map(|cfg| Ok(Args::History(cfg)))?,
-            "delete" => delete::DeleteArgs::from_args(args).await.map(|cfg| Ok(Args::Delete(cfg)))?,
-            "restore" => restore::RestoreArgs::from_args(args).await.map(|cfg| Ok(Args::Restore(cfg)))?,
-            "config" => config::ConfigArgs::from_args(args).await.map(|cfg| Ok(Args::Config(cfg)))?,
-            "verify" => verify::VerifyArgs::from_args(args).await.map(|cfg| Ok(Args::Verify(cfg)))?,
+            "help" => help::HelpArgs::from_args(args).await.map(Args::Help),
+            "init" => init::InitArgs::from_args(args).await.map(Args::Init),
+            "backup" => backup::BackupArgs::from_args(args).await.map(Args::Backup),
+            "list" => list::ListArgs::from_args(args).await.map(Args::List),
+            "history" => history::HistoryArgs::from_args(args).await.map(Args::History),
+            "delete" => delete::DeleteArgs::from_args(args).await.map(Args::Delete),
+            "restore" => restore::RestoreArgs::from_args(args).await.map(Args::Restore),
+            "config" => config::ConfigArgs::from_args(args).await.map(Args::Config),
+            "verify" => verify::VerifyArgs::from_args(args).await.map(Args::Verify),
             _ => Err(InvalidParameters),
         }
     }
