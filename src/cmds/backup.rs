@@ -165,10 +165,11 @@ impl BackupCommand {
     // case (rename failed after DB update) is recovered by --continue via an extra fs.exists() check
     // in process_deleted_file: archive_exists()=true but fs.exists()=false → retries the rename.
 
-    async fn insert_new_file(args: &Arc<BackupArgs>, db: &Database, fs: &FileSystem, sid: u64, file: &mut File) -> Result<(), CmdError> {
-        file.digest = fs.compute_digest(file, &args.config.source).await?;
-        fs.copy_new_file(file, args.config.hash_comparison).await?;
-        file.insert(db, sid).await
+    async fn insert_new_file(args: &Arc<BackupArgs>, db: &Database, fs: &FileSystem, sid: u64, mut file: File) -> Result<File, CmdError> {
+        file.digest = fs.compute_digest(&file, &args.config.source).await?;
+        fs.copy_new_file(&file, args.config.hash_comparison).await?;
+        file.insert(db, sid).await?;
+        Ok(file)
     }
 
     async fn insert_unchanged_file(db: &Database, _fs: &FileSystem, sid: u64, file: &File) -> Result<(), CmdError> {
@@ -366,39 +367,55 @@ impl BackupCommand {
     async fn process_new_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<File>,
     ) -> Result<(), CmdError> {
-        // let mut set = JoinSet::new();
-        for mut file in files {
+        let mut set = JoinSet::new();
+        for file in files {
             if args.verbose || psid != 0 {
                 println!("  New file {:?}", file.fullname())
             }
             if !args.dry_run && (!args.cont || !file.exists(db, sid).await?) {
-                Self::insert_new_file(args, db, fs, sid, &mut file).await?;
+                let args = Arc::clone(args);
+                let db = Arc::clone(db);
+                let fs = Arc::clone(fs);
+                set.spawn(async move {
+                    let _ = Self::insert_new_file(&args, &db, &fs, sid, file).await?;
+                    Ok(())
+                });
             }
         }
-        // while let Some(result) = set.join_next().await {
-        //     result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
-        // }
+        while let Some(result) = set.join_next().await {
+            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+        }
         Ok(())
     }
 
     async fn process_modified_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<(File, File)>,
     ) -> Result<(), CmdError> {
-        for (mut previous_file, mut file) in files {
+        let mut set = JoinSet::new();
+        for (mut previous_file, file) in files {
             if args.verbose || psid != 0 {
                 println!("  Modified file {:?}", previous_file.fullname())
             }
-            if !args.dry_run {
-                if args.config.is_incremental(&file.fullname()) {
-                    if !args.cont || !file.exists(db, sid).await? {
-                        Self::archive_file(db, fs, sid, &mut previous_file).await?;
-                        Self::insert_new_file(args, db, fs, sid, &mut file).await?;
+            let args = Arc::clone(args);
+            let db = Arc::clone(db);
+            let fs = Arc::clone(fs);
+            set.spawn(async move {
+                if !args.dry_run {
+                    if args.config.is_incremental(&file.fullname()) {
+                        if !args.cont || !file.exists(&db, sid).await? {
+                            Self::archive_file(&db, &fs, sid, &mut previous_file).await?;
+                            let _ = Self::insert_new_file(&args, &db, &fs, sid, file).await?;
+                        }
+                    } else if !args.cont || !file.exists(&db, sid).await? {
+                        let file = Self::insert_new_file(&args, &db, &fs, sid, file).await?;
+                        Self::remove_previous_file(&db, &fs, &previous_file, &file).await?;
                     }
-                } else if !args.cont || !file.exists(db, sid).await? {
-                    Self::insert_new_file(args, db, fs, sid, &mut file).await?;
-                    Self::remove_previous_file(db, fs, &previous_file, &file).await?;
                 }
-            }
+                Ok(())
+            });
+        }
+        while let Some(result) = set.join_next().await {
+            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
@@ -406,10 +423,20 @@ impl BackupCommand {
     async fn process_unchanged_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, _psid: u64, sid: u64, files: Vec<File>,
     ) -> Result<(), CmdError> {
+        let mut set = JoinSet::new();
         for previous_file in files {
-            if !args.dry_run && (!args.cont || !previous_file.exists(db, sid).await?) {
-                Self::insert_unchanged_file(db, fs, sid, &previous_file).await?;
-            }
+            let args = Arc::clone(args);
+            let db = Arc::clone(db);
+            let fs = Arc::clone(fs);
+            set.spawn(async move {
+                if !args.dry_run && (!args.cont || !previous_file.exists(&db, sid).await?) {
+                    Self::insert_unchanged_file(&db, &fs, sid, &previous_file).await?;
+                }
+                Ok(())
+            });
+        }
+        while let Some(result) = set.join_next().await {
+            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
@@ -417,20 +444,30 @@ impl BackupCommand {
     async fn process_deleted_files(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, files: Vec<File>,
     ) -> Result<(), CmdError> {
+        let mut set = JoinSet::new();
         for mut file in files {
             file.deleted_sid = sid;
             if args.verbose || psid != 0 {
                 println!("  Deleted file {:?}", file.fullname())
             }
-            if !args.dry_run {
-                if args.config.is_incremental(&file.fullname()) {
-                    if !args.cont || !file.archive_exists(db, sid).await? || !fs.exists(&file, &args.config.target).await? {
-                        Self::archive_file(db, fs, sid, &mut file).await?;
+            let args = Arc::clone(args);
+            let db = Arc::clone(db);
+            let fs = Arc::clone(fs);
+            set.spawn(async move {
+                if !args.dry_run {
+                    if args.config.is_incremental(&file.fullname()) {
+                        if !args.cont || !file.archive_exists(&db, sid).await? || !fs.exists(&file, &args.config.target).await? {
+                            Self::archive_file(&db, &fs, sid, &mut file).await?;
+                        }
+                    } else if !args.cont || file.exists(&db, sid).await? {
+                        Self::remove_file(&db, &fs, &file).await?;
                     }
-                } else if !args.cont || file.exists(db, sid).await? {
-                    Self::remove_file(db, fs, &file).await?;
                 }
-            }
+                Ok(())
+            });
+        }
+        while let Some(result) = set.join_next().await {
+            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
@@ -438,10 +475,19 @@ impl BackupCommand {
     async fn process_unchanged_dirs(
         args: &Arc<BackupArgs>, db: &Arc<Database>, _: &Arc<FileSystem>, _psid: u64, sid: u64, dirs: Vec<File>,
     ) -> Result<(), CmdError> {
+        let mut set = JoinSet::new();
         for dir in dirs {
-            if !args.dry_run && (!args.cont || !dir.exists(db, sid).await?) {
-                dir.insert_ref(db, sid).await?;
-            }
+            let args = Arc::clone(args);
+            let db = Arc::clone(db);
+            set.spawn(async move {
+                if !args.dry_run && (!args.cont || !dir.exists(&db, sid).await?) {
+                    dir.insert_ref(&db, sid).await?;
+                }
+                Ok(())
+            });
+        }
+        while let Some(result) = set.join_next().await {
+            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
@@ -449,8 +495,18 @@ impl BackupCommand {
     async fn process_new_dirs(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, dirs: Vec<Directory>,
     ) -> Result<(), CmdError> {
+        let mut set = JoinSet::new();
         for dir in dirs {
-            Self::process_new_dir(args, db, fs, psid, sid, dir).await?;
+            let args = Arc::clone(args);
+            let db = Arc::clone(db);
+            let fs = Arc::clone(fs);
+            set.spawn(async move {
+                Self::process_new_dir(&args, &db, &fs, psid, sid, dir).await?;
+                Ok(())
+            });
+        }
+        while let Some(result) = set.join_next().await {
+            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
@@ -458,8 +514,18 @@ impl BackupCommand {
     async fn process_deleted_dirs(
         args: &Arc<BackupArgs>, db: &Arc<Database>, fs: &Arc<FileSystem>, psid: u64, sid: u64, dirs: Vec<Directory>,
     ) -> Result<(), CmdError> {
+        let mut set = JoinSet::new();
         for dir in dirs {
-            Self::process_deleted_dir(args, db, fs, psid, sid, dir).await?;
+            let args = Arc::clone(args);
+            let db = Arc::clone(db);
+            let fs = Arc::clone(fs);
+            set.spawn(async move {
+                Self::process_deleted_dir(&args, &db, &fs, psid, sid, dir).await?;
+                Ok(())
+            });
+        }
+        while let Some(result) = set.join_next().await {
+            result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
         }
         Ok(())
     }
@@ -472,11 +538,23 @@ impl BackupCommand {
                 dir.entry.insert(db, sid).await?;
             }
             let files: Vec<File> = dir.files.into_iter().collect();
-            Self::process_new_files(args, db, fs, psid, sid, files).await?;
             let dirs: Vec<Directory> = dir.children.into_iter().collect();
-            for dir in dirs {
-                Self::process_new_dir(args, db, fs, psid, sid, dir).await?;
-            }
+            tokio::try_join!(Self::process_new_files(args, db, fs, psid, sid, files), async move {
+                let mut set = JoinSet::new();
+                for dir in dirs {
+                    let args = Arc::clone(args);
+                    let db = Arc::clone(db);
+                    let fs = Arc::clone(fs);
+                    set.spawn(async move {
+                        Self::process_new_dir(&args, &db, &fs, psid, sid, dir).await?;
+                        Ok(())
+                    });
+                }
+                while let Some(result) = set.join_next().await {
+                    result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                }
+                Ok(())
+            },)?;
             Ok(())
         })
     }
@@ -489,11 +567,23 @@ impl BackupCommand {
                 println!("Deleted dir {:?}", dir.entry.fullname())
             }
             let files: Vec<File> = dir.files.into_iter().collect();
-            Self::process_deleted_files(args, db, fs, psid, sid, files).await?;
             let dirs: Vec<Directory> = dir.children.into_iter().collect();
-            for dir in dirs {
-                Self::process_deleted_dir(args, db, fs, psid, sid, dir).await?;
-            }
+            tokio::try_join!(Self::process_deleted_files(args, db, fs, psid, sid, files), async move {
+                let mut set = JoinSet::new();
+                for dir in dirs {
+                    let args = Arc::clone(args);
+                    let db = Arc::clone(db);
+                    let fs = Arc::clone(fs);
+                    set.spawn(async move {
+                        Self::process_deleted_dir(&args, &db, &fs, psid, sid, dir).await?;
+                        Ok(())
+                    });
+                }
+                while let Some(result) = set.join_next().await {
+                    result.map_err(|_| CmdError::GenericError(String::from("Cannot join tokio tasks")))??;
+                }
+                Ok(())
+            },)?;
             if !args.dry_run {
                 if args.config.is_incremental(&dir.entry.fullname()) {
                     if !args.cont || !dir.entry.archive_exists(db, sid).await? {

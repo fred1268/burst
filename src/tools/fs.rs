@@ -74,7 +74,7 @@ impl FileSystem {
         }
     }
 
-    pub async fn copy_new_file(&self, file: &mut File, compare_hash: bool) -> Result<(), CmdError> {
+    pub async fn copy_new_file(&self, file: &File, compare_hash: bool) -> Result<(), CmdError> {
         let to = file.archive_dir(&self.target);
         if !tokio::fs::try_exists(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))? {
             tokio::fs::create_dir_all(&to).await.map_err(|err| CmdError::IoError(IoError::from(&to, err)))?;
